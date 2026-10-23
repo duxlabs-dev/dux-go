@@ -128,9 +128,7 @@ func (s sessionInstance) stop(grace time.Duration) {
 }
 
 func (s sessionInstance) removeFiles() {
-	for _, ext := range instanceFileExtensions {
-		os.Remove(s.base + ext)
-	}
+	removeInstanceFiles(s.base)
 }
 
 func procStartTime(pid int) (uint64, bool) {

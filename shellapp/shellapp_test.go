@@ -478,6 +478,34 @@ func TestClaimSessionIgnoresOtherDisplays(t *testing.T) {
 	assert.True(t, ui.alive())
 }
 
+func TestClaimSessionSkipsLeftoverSessionFile(t *testing.T) {
+	a := testApp(t)
+	t.Setenv("WAYLAND_DISPLAY", "wayland-test")
+	// "danktest-1" sorts before any real PID, so the lookup reaches it first.
+	leftover := filepath.Join(a.runtimeDir(), "danktest-1"+sessionFileExtension)
+	require.NoError(t, os.WriteFile(leftover, []byte("wayland-test"), 0o644))
+	_, ui := fakeInstance(t, a, "wayland-test", true, recordMatching)
+
+	assert.False(t, a.claimSession(false))
+	assert.True(t, ui.alive())
+}
+
+func TestPIDsReapsDeadInstanceFiles(t *testing.T) {
+	a := testApp(t)
+	dead := exec.Command("true")
+	require.NoError(t, dead.Run())
+
+	base := filepath.Join(a.runtimeDir(), "danktest-1")
+	for _, ext := range instanceFileExtensions {
+		require.NoError(t, os.WriteFile(base+ext, []byte(strconv.Itoa(dead.Process.Pid)), 0o644))
+	}
+
+	assert.Empty(t, a.PIDs())
+	for _, ext := range instanceFileExtensions {
+		assert.NoFileExists(t, base+ext)
+	}
+}
+
 func TestInstanceFilesFollowPIDFile(t *testing.T) {
 	a := testApp(t)
 	a.sessionManaged = true

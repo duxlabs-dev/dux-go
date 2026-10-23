@@ -118,13 +118,8 @@ func (a *App) PIDs() []int {
 		}
 
 		childPID, err := strconv.Atoi(strings.TrimSpace(string(data)))
-		if err != nil {
-			os.Remove(pidFile)
-			continue
-		}
-
-		if !processAlive(childPID) {
-			os.Remove(pidFile)
+		if err != nil || !processAlive(childPID) {
+			removeInstanceFiles(strings.TrimSuffix(pidFile, pidFileExtension))
 			continue
 		}
 
@@ -141,6 +136,12 @@ func (a *App) PIDs() []int {
 	}
 
 	return pids
+}
+
+func removeInstanceFiles(base string) {
+	for _, ext := range instanceFileExtensions {
+		os.Remove(base + ext)
+	}
 }
 
 func processAlive(pid int) bool {
@@ -177,6 +178,15 @@ func (a *App) sessionParentPID(display string) (int, string, bool) {
 		parentStr := strings.TrimSuffix(strings.TrimPrefix(name, prefix), sessionFileExtension)
 		parentPID, err := strconv.Atoi(parentStr)
 		if err != nil {
+			continue
+		}
+
+		// A leftover session file must not shadow a live instance listed after it.
+		pidData, err := os.ReadFile(filepath.Join(dir, prefix+parentStr+pidFileExtension))
+		if err != nil {
+			continue
+		}
+		if uiPID, err := strconv.Atoi(strings.TrimSpace(string(pidData))); err != nil || !processAlive(uiPID) {
 			continue
 		}
 
