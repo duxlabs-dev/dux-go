@@ -30,18 +30,15 @@ func (a *App) runCommand() *cobra.Command {
 			a.startHidden, _ = cmd.Flags().GetBool("hidden")
 			isDaemonChild, _ := cmd.Flags().GetBool("daemon-child")
 
-			if !isDaemonChild && a.cfg.ShowMethod != "" && len(a.PIDs()) > 0 {
+			if !isDaemonChild && !session && a.cfg.ShowMethod != "" && len(a.PIDs()) > 0 {
 				if err := a.CallUI(a.cfg.ShowMethod, nil); err == nil {
 					log.Infof("%s already running; showing window", binaryName())
 					return nil
 				}
 			}
 
-			if !isDaemonChild {
-				if pid, ok := a.sessionUIPID(); ok {
-					log.Infof("%s already running for this session (pid=%d); refusing to start a second instance", binaryName(), pid)
-					return nil
-				}
+			if !isDaemonChild && !a.claimSession(session) {
+				return nil
 			}
 
 			if err := a.applyLogFlags(cmd); err != nil {

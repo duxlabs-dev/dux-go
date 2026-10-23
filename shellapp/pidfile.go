@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -12,7 +13,11 @@ import (
 const (
 	pidFileExtension     = ".pid"
 	sessionFileExtension = ".session"
+	managedFileExtension = ".managed"
+	startFileExtension   = ".start"
 )
+
+var instanceFileExtensions = []string{pidFileExtension, sessionFileExtension, managedFileExtension, startFileExtension}
 
 func (a *App) pidFilePrefix() string { return a.cfg.ID + "-" }
 
@@ -35,7 +40,28 @@ func (a *App) sessionFilePath() string {
 	return filepath.Join(a.runtimeDir(), fmt.Sprintf("%s%d%s", a.pidFilePrefix(), os.Getpid(), sessionFileExtension))
 }
 
+func (a *App) managedFilePath() string {
+	return filepath.Join(a.runtimeDir(), fmt.Sprintf("%s%d%s", a.pidFilePrefix(), os.Getpid(), managedFileExtension))
+}
+
+func (a *App) startFilePath() string {
+	return filepath.Join(a.runtimeDir(), fmt.Sprintf("%s%d%s", a.pidFilePrefix(), os.Getpid(), startFileExtension))
+}
+
 func (a *App) writePIDFile(childPID int) error {
+	// Start times let a later takeover tell these processes from reused PIDs.
+	if parentStart, ok := procStartTime(os.Getpid()); ok {
+		if childStart, ok := procStartTime(childPID); ok {
+			if err := os.WriteFile(a.startFilePath(), []byte(fmt.Sprintf("%d %d", parentStart, childStart)), 0o644); err != nil {
+				return err
+			}
+		}
+	}
+	if a.sessionManaged {
+		if err := os.WriteFile(a.managedFilePath(), nil, 0o644); err != nil {
+			return err
+		}
+	}
 	if display := os.Getenv("WAYLAND_DISPLAY"); display != "" {
 		if err := os.WriteFile(a.sessionFilePath(), []byte(display), 0o644); err != nil {
 			return err
@@ -47,6 +73,8 @@ func (a *App) writePIDFile(childPID int) error {
 func (a *App) removePIDFile() {
 	os.Remove(a.pidFilePath())
 	os.Remove(a.sessionFilePath())
+	os.Remove(a.managedFilePath())
+	os.Remove(a.startFilePath())
 }
 
 func (a *App) removeAllPIDFiles() {
@@ -59,7 +87,7 @@ func (a *App) removeAllPIDFiles() {
 		if _, ok := a.matchPrefix(name); !ok {
 			continue
 		}
-		if strings.HasSuffix(name, pidFileExtension) || strings.HasSuffix(name, sessionFileExtension) {
+		if slices.ContainsFunc(instanceFileExtensions, func(ext string) bool { return strings.HasSuffix(name, ext) }) {
 			os.Remove(filepath.Join(a.runtimeDir(), name))
 		}
 	}
@@ -189,23 +217,8 @@ func (a *App) firstChildPID() (int, bool) {
 // sessionUIPID returns the UI child PID for the current WAYLAND_DISPLAY
 // session only, with no cross-session fallback.
 func (a *App) sessionUIPID() (int, bool) {
-	parentPID, prefix, ok := a.sessionParentPID(os.Getenv("WAYLAND_DISPLAY"))
-	if !ok {
-		return 0, false
-	}
-
-	pidFile := filepath.Join(a.runtimeDir(), fmt.Sprintf("%s%d%s", prefix, parentPID, pidFileExtension))
-	data, err := os.ReadFile(pidFile)
-	if err != nil {
-		return 0, false
-	}
-
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || !processAlive(pid) {
-		return 0, false
-	}
-
-	return pid, true
+	inst, ok := a.currentSessionInstance()
+	return inst.ui.pid, ok
 }
 
 // SessionPID returns the UI child PID for the current WAYLAND_DISPLAY

@@ -378,3 +378,119 @@ func TestExtraEnvAppended(t *testing.T) {
 	assert.Contains(t, env, "DANKTEST_EXECUTABLE=/usr/bin/danktest")
 	assert.Contains(t, env, "CONFIG=/some/shell")
 }
+
+type fakeRecord int
+
+const (
+	recordMatching fakeRecord = iota
+	recordMissing
+	recordStale // UI PID reused by an unrelated process
+)
+
+func requireProcStartTimes(t *testing.T) {
+	t.Helper()
+	if _, ok := procStartTime(os.Getpid()); !ok {
+		t.Skip("process start times need /proc")
+	}
+}
+
+// fakeInstance starts a supervisor stand-in that, like superviseShell, takes its UI child down on SIGTERM.
+func fakeInstance(t *testing.T, a *App, display string, managed bool, record fakeRecord) (parent, ui proc) {
+	t.Helper()
+	requireProcStartTimes(t)
+	cmd := exec.Command("sh", "-c", `trap 'kill $c; exit 0' TERM; sleep 30 & c=$!; echo $c; wait`)
+	out, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	go cmd.Wait()
+
+	line := make([]byte, 32)
+	n, err := out.Read(line)
+	require.NoError(t, err)
+	ui.pid, err = strconv.Atoi(strings.TrimSpace(string(line[:n])))
+	require.NoError(t, err)
+	parent.pid = cmd.Process.Pid
+	t.Cleanup(func() {
+		syscall.Kill(ui.pid, syscall.SIGKILL)
+		syscall.Kill(parent.pid, syscall.SIGKILL)
+	})
+
+	var ok bool
+	parent.start, ok = procStartTime(parent.pid)
+	require.True(t, ok)
+	ui.start, ok = procStartTime(ui.pid)
+	require.True(t, ok)
+
+	base := filepath.Join(a.runtimeDir(), fmt.Sprintf("danktest-%d", parent.pid))
+	require.NoError(t, os.WriteFile(base+pidFileExtension, []byte(strconv.Itoa(ui.pid)), 0o644))
+	require.NoError(t, os.WriteFile(base+sessionFileExtension, []byte(display), 0o644))
+	if managed {
+		require.NoError(t, os.WriteFile(base+managedFileExtension, nil, 0o644))
+	}
+	switch record {
+	case recordMatching:
+		require.NoError(t, os.WriteFile(base+startFileExtension, []byte(fmt.Sprintf("%d %d", parent.start, ui.start)), 0o644))
+	case recordStale:
+		require.NoError(t, os.WriteFile(base+startFileExtension, []byte(fmt.Sprintf("%d %d", parent.start+1, ui.start+1)), 0o644))
+	}
+	return parent, ui
+}
+
+func TestClaimSession(t *testing.T) {
+	tests := []struct {
+		name          string
+		holderManaged bool
+		record        fakeRecord
+		session       bool
+		wantStart     bool
+		wantKilled    bool
+	}{
+		{"service start replaces hand-started instance", false, recordMatching, true, true, true},
+		{"hand start refuses hand-started instance", false, recordMatching, false, false, false},
+		{"service start refuses service instance", true, recordMatching, true, false, false},
+		{"hand start refuses service instance", true, recordMatching, false, false, false},
+		{"service start refuses unverifiable instance", false, recordMissing, true, false, false},
+		{"hand start refuses unverifiable instance", false, recordMissing, false, false, false},
+		{"stale record never signals the reused PID", false, recordStale, true, true, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := testApp(t)
+			t.Setenv("WAYLAND_DISPLAY", "wayland-test")
+			parent, ui := fakeInstance(t, a, "wayland-test", tt.holderManaged, tt.record)
+
+			assert.Equal(t, tt.wantStart, a.claimSession(tt.session))
+			assert.Equal(t, !tt.wantKilled, ui.alive(), "holder UI alive")
+			assert.Equal(t, !tt.wantKilled, parent.alive(), "holder supervisor alive")
+			_, ok := a.currentSessionInstance()
+			assert.Equal(t, !tt.wantStart, ok, "holder still registered")
+		})
+	}
+}
+
+func TestClaimSessionIgnoresOtherDisplays(t *testing.T) {
+	a := testApp(t)
+	t.Setenv("WAYLAND_DISPLAY", "wayland-test")
+	_, ui := fakeInstance(t, a, "wayland-other", false, recordMatching)
+
+	assert.True(t, a.claimSession(true))
+	assert.True(t, ui.alive())
+}
+
+func TestInstanceFilesFollowPIDFile(t *testing.T) {
+	a := testApp(t)
+	a.sessionManaged = true
+
+	require.NoError(t, a.writePIDFile(os.Getpid()))
+	assert.FileExists(t, a.managedFilePath())
+	if _, ok := procStartTime(os.Getpid()); ok {
+		assert.FileExists(t, a.startFilePath())
+	} else {
+		assert.NoFileExists(t, a.startFilePath())
+	}
+
+	a.removePIDFile()
+	assert.NoFileExists(t, a.managedFilePath())
+	assert.NoFileExists(t, a.startFilePath())
+}
