@@ -37,37 +37,57 @@ func newAssociations() *MimeAssociations {
 	}
 }
 
+// $desktop-mimeapps.list for each XDG_CURRENT_DESKTOP entry outranks the plain file.
+func mimeappsFileNames() []string {
+	var names []string
+	for d := range strings.SplitSeq(os.Getenv("XDG_CURRENT_DESKTOP"), ":") {
+		d = strings.ToLower(strings.TrimSpace(d))
+		if d == "" {
+			continue
+		}
+		names = append(names, d+"-mimeapps.list")
+	}
+	return append(names, "mimeapps.list")
+}
+
 func mimeappsSearchPaths() []string {
 	var found []string
 	seen := make(map[string]bool)
+	names := mimeappsFileNames()
 
-	add := func(p string) {
-		if p == "" || seen[p] {
+	add := func(dir string) {
+		if dir == "" {
 			return
 		}
-		seen[p] = true
-		found = append(found, p)
+		for _, name := range names {
+			p := filepath.Join(dir, name)
+			if seen[p] {
+				continue
+			}
+			seen[p] = true
+			found = append(found, p)
+		}
 	}
 
-	add(filepath.Join(paths.XDGConfigHome(), "mimeapps.list"))
+	add(paths.XDGConfigHome())
 
 	if env := os.Getenv("XDG_CONFIG_DIRS"); env != "" {
 		for d := range strings.SplitSeq(env, ":") {
-			add(filepath.Join(strings.TrimSpace(d), "mimeapps.list"))
+			add(strings.TrimSpace(d))
 		}
 	} else {
-		add("/etc/xdg/mimeapps.list")
+		add("/etc/xdg")
 	}
 
-	add(filepath.Join(paths.XDGDataHome(), "applications", "mimeapps.list"))
+	add(filepath.Join(paths.XDGDataHome(), "applications"))
 
 	if env := os.Getenv("XDG_DATA_DIRS"); env != "" {
 		for d := range strings.SplitSeq(env, ":") {
-			add(filepath.Join(strings.TrimSpace(d), "applications", "mimeapps.list"))
+			add(filepath.Join(strings.TrimSpace(d), "applications"))
 		}
 	} else {
-		add("/usr/local/share/applications/mimeapps.list")
-		add("/usr/share/applications/mimeapps.list")
+		add("/usr/local/share/applications")
+		add("/usr/share/applications")
 	}
 
 	return found

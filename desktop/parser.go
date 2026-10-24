@@ -3,6 +3,7 @@ package desktop
 import (
 	"bufio"
 	"bytes"
+	"os"
 	"strings"
 )
 
@@ -43,9 +44,6 @@ func parseGroups(data []byte) map[string]*group {
 		}
 
 		key := strings.TrimSpace(line[:eq])
-		if bracket := strings.IndexByte(key, '['); bracket > 0 {
-			key = key[:bracket]
-		}
 		if _, ok := current.keys[key]; ok {
 			continue
 		}
@@ -53,6 +51,47 @@ func parseGroups(data []byte) map[string]*group {
 	}
 
 	return groups
+}
+
+// Spec lookup order: lang_COUNTRY@MODIFIER, lang_COUNTRY, lang@MODIFIER, lang, then the plain key.
+func (g *group) localized(key string) string {
+	for _, suffix := range localeSuffixes() {
+		if v, ok := g.keys[key+"["+suffix+"]"]; ok {
+			return v
+		}
+	}
+	return g.keys[key]
+}
+
+func localeSuffixes() []string {
+	locale := ""
+	for _, env := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
+		if v := os.Getenv(env); v != "" {
+			locale = v
+			break
+		}
+	}
+	if locale == "" || locale == "C" || locale == "POSIX" {
+		return nil
+	}
+	locale, modifier, _ := strings.Cut(locale, "@")
+	locale, _, _ = strings.Cut(locale, ".")
+	lang, country, _ := strings.Cut(locale, "_")
+	if lang == "" {
+		return nil
+	}
+
+	var out []string
+	if country != "" && modifier != "" {
+		out = append(out, lang+"_"+country+"@"+modifier)
+	}
+	if country != "" {
+		out = append(out, lang+"_"+country)
+	}
+	if modifier != "" {
+		out = append(out, lang+"@"+modifier)
+	}
+	return append(out, lang)
 }
 
 func splitList(value string) []string {

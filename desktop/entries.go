@@ -107,7 +107,7 @@ func parseEntry(path string, id string) (*Entry, error) {
 	entry := &Entry{
 		ID:         id,
 		Path:       path,
-		Name:       g.keys["Name"],
+		Name:       g.localized("Name"),
 		Exec:       g.keys["Exec"],
 		Icon:       g.keys["Icon"],
 		Categories: splitList(g.keys["Categories"]),

@@ -3,6 +3,7 @@ package desktop
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 )
@@ -230,4 +231,78 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+func TestEntryNameFollowsMessageLocale(t *testing.T) {
+	_, dataHome := setupFakeXDG(t)
+	t.Setenv("LANGUAGE", "")
+	t.Setenv("LC_ALL", "")
+	t.Setenv("LC_MESSAGES", "")
+	t.Setenv("LANG", "C")
+	// GNOME ships translations above the plain key
+	writeFile(t, filepath.Join(dataHome, "applications", "files.desktop"), `[Desktop Entry]
+Name[ab]=Афаилқәа
+Name[de_AT]=Dateien (AT)
+Name[de]=Dateien
+Name=Files
+Type=Application
+`)
+
+	if got := EntryByID("files.desktop").Name; got != "Files" {
+		t.Errorf("Name under C locale = %q want Files", got)
+	}
+
+	t.Setenv("LC_MESSAGES", "de_AT.UTF-8")
+	InvalidateCache()
+	if got := EntryByID("files.desktop").Name; got != "Dateien (AT)" {
+		t.Errorf("Name under de_AT = %q want Dateien (AT)", got)
+	}
+
+	t.Setenv("LC_MESSAGES", "de_CH.UTF-8")
+	InvalidateCache()
+	if got := EntryByID("files.desktop").Name; got != "Dateien" {
+		t.Errorf("Name under de_CH = %q want Dateien", got)
+	}
+}
+
+func TestDefaultsSkipUninstalledApps(t *testing.T) {
+	configHome, dataHome := setupFakeXDG(t)
+	writeFile(t, filepath.Join(dataHome, "applications", "real.desktop"), `[Desktop Entry]
+Type=Application
+Name=Real
+MimeType=x-scheme-handler/mailto;
+`)
+	writeFile(t, filepath.Join(dataHome, "applications", "mimeinfo.cache"), `[MIME Cache]
+x-scheme-handler/mailto=gone-too.desktop;real.desktop;
+`)
+	writeFile(t, filepath.Join(configHome, "mimeapps.list"), `[Default Applications]
+x-scheme-handler/mailto=gone.desktop
+
+[Added Associations]
+x-scheme-handler/mailto=gone.desktop;
+`)
+
+	if got := GetDefault("x-scheme-handler/mailto"); got != "real.desktop" {
+		t.Errorf("GetDefault = %q want real.desktop (uninstalled defaults must be skipped)", got)
+	}
+	// applicationDirs always appends the host flatpak exports, so only check the head
+	got := AppsForMime("x-scheme-handler/mailto")
+	if len(got) == 0 || got[0] != "real.desktop" || slices.Contains(got, "gone.desktop") || slices.Contains(got, "gone-too.desktop") {
+		t.Errorf("AppsForMime = %v want real.desktop first and no stale ids", got)
+	}
+}
+
+func TestDesktopSpecificMimeappsWins(t *testing.T) {
+	configHome, dataHome := setupFakeXDG(t)
+	t.Setenv("XDG_CURRENT_DESKTOP", "Niri:GNOME")
+	for _, id := range []string{"a", "b", "c"} {
+		writeFile(t, filepath.Join(dataHome, "applications", id+".desktop"), "[Desktop Entry]\nType=Application\nName="+id+"\nMimeType=image/png;\n")
+	}
+	writeFile(t, filepath.Join(configHome, "mimeapps.list"), "[Default Applications]\nimage/png=c.desktop\n")
+	writeFile(t, filepath.Join(configHome, "gnome-mimeapps.list"), "[Default Applications]\nimage/png=b.desktop\n")
+	writeFile(t, filepath.Join(configHome, "niri-mimeapps.list"), "[Default Applications]\nimage/png=a.desktop\n")
+
+	if got := GetDefault("image/png"); got != "a.desktop" {
+		t.Errorf("GetDefault = %q want a.desktop (niri-mimeapps.list first)", got)
+	}
 }

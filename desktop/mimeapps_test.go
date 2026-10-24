@@ -7,8 +7,18 @@ import (
 	"testing"
 )
 
+func writeDolphin(t *testing.T, dataHome string) {
+	t.Helper()
+	writeFile(t, filepath.Join(dataHome, "applications", "org.kde.dolphin.desktop"), `[Desktop Entry]
+Type=Application
+Name=Dolphin
+MimeType=inode/directory;
+`)
+}
+
 func TestSetDefaultsPreservesUnrelatedContent(t *testing.T) {
-	configHome, _ := setupFakeXDG(t)
+	configHome, dataHome := setupFakeXDG(t)
+	writeDolphin(t, dataHome)
 	path := filepath.Join(configHome, "mimeapps.list")
 	writeFile(t, path, `# managed by hand
 [Default Applications]
@@ -132,7 +142,8 @@ func TestSetDefaultsCreatesFileWhenAbsent(t *testing.T) {
 }
 
 func TestSetDefaultClearsRemovedAssociation(t *testing.T) {
-	configHome, _ := setupFakeXDG(t)
+	configHome, dataHome := setupFakeXDG(t)
+	writeDolphin(t, dataHome)
 	path := filepath.Join(configHome, "mimeapps.list")
 	writeFile(t, path, `[Removed Associations]
 inode/directory=org.kde.dolphin.desktop;other.desktop;

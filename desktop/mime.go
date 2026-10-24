@@ -201,13 +201,19 @@ func entrySupportsMime(entry *Entry, chain []string) bool {
 	return false
 }
 
+// mimeapps.list and mimeinfo.cache keep ids of uninstalled apps; the spec says skip them.
+func installed(id string) bool {
+	entry := EntryByID(id)
+	return entry != nil && !entry.Hidden
+}
+
 func GetDefault(mimeType string) string {
 	merged := mergedAssociations()
 	chain := mimeChain(mimeType)
 
 	for _, m := range chain {
 		if id, ok := merged.Defaults[m]; ok {
-			if !slices.Contains(merged.Removed[m], id) {
+			if !slices.Contains(merged.Removed[m], id) && installed(id) {
 				return id
 			}
 		}
@@ -215,7 +221,7 @@ func GetDefault(mimeType string) string {
 
 	for _, m := range chain {
 		for _, id := range merged.Added[m] {
-			if !slices.Contains(merged.Removed[m], id) {
+			if !slices.Contains(merged.Removed[m], id) && installed(id) {
 				return id
 			}
 		}
@@ -223,7 +229,7 @@ func GetDefault(mimeType string) string {
 
 	for _, m := range chain {
 		for _, id := range cacheAppsForMime(m) {
-			if !slices.Contains(merged.Removed[m], id) {
+			if !slices.Contains(merged.Removed[m], id) && installed(id) {
 				return id
 			}
 		}
@@ -272,6 +278,9 @@ func AppsForMime(mimeType string) []string {
 			return
 		}
 		seen[id] = true
+		if !installed(id) {
+			return
+		}
 		out = append(out, id)
 	}
 
