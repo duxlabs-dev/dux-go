@@ -46,6 +46,7 @@ type ttmlParser struct {
 	scopes      []ttmlScope
 	rootSeen    bool
 	inBody      bool
+	length      Seconds
 	inParagraph bool
 	parts       []*ttmlLine
 	paragraphs  int
@@ -94,7 +95,7 @@ func ParseTTML(data []byte) (*Lyrics, error) {
 	}
 
 	sortLines(parser.synced)
-	result := &Lyrics{Synced: parser.synced, Plain: strings.Join(parser.plain, "\n"), Source: SourceTTML}
+	result := &Lyrics{Synced: parser.synced, Plain: strings.Join(parser.plain, "\n"), DurationMS: parser.length.ms(), Source: SourceTTML}
 	if len(parser.voices) > 0 {
 		result.Voices = parser.voices
 	}
@@ -174,6 +175,7 @@ func (p *ttmlParser) open(element xml.StartElement) error {
 	p.scopes = append(p.scopes, scope)
 	if name == "body" {
 		p.inBody = true
+		p.length = scope.end
 	}
 	if !p.inBody || scope.skipped {
 		return nil

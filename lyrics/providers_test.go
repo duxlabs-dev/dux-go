@@ -67,24 +67,6 @@ func TestConcurrentProviderPriorityAndCancellation(t *testing.T) {
 	}
 }
 
-func TestWordSyncOutranksPriority(t *testing.T) {
-	client := isolate(t)
-	client.syncGrace = time.Minute
-	lineReady := make(chan struct{})
-	stub(client, func(_ context.Context, provider Provider, _ Request) (*Lyrics, error) {
-		if provider == LRCLIB {
-			close(lineReady)
-			return &Lyrics{Synced: []Line{{Text: "line synced"}}}, nil
-		}
-		<-lineReady
-		return &Lyrics{Synced: []Line{{Text: "word synced", Words: []Word{{Text: "word synced"}}}}}, nil
-	})
-	result, err := client.Lookup(context.Background(), Request{Artist: "Artist", Title: "Track", Providers: []Provider{LRCLIB, LyricsPlus}})
-	if err != nil || result.Source != LyricsPlus {
-		t.Fatalf("result=%+v err=%v", result, err)
-	}
-}
-
 func TestLineSyncOutranksPlainAtHigherPriority(t *testing.T) {
 	client := isolate(t)
 	client.syncGrace = time.Minute

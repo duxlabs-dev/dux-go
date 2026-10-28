@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func encodeKRC(t *testing.T, text string) []byte {
@@ -105,5 +106,28 @@ func TestKuGouDropsBakedTranslations(t *testing.T) {
 	hangul := "[0,1000]<0,1000,0>saranghae\n[1000,500]<0,500,0>사랑해\n[2000,1000]<0,1000,0>yeongwonhi\n[3000,500]<0,500,0>영원히\n"
 	if got := english(roman, hangul); got != "saranghae\n사랑해\nyeongwonhi\n영원히" {
 		t.Errorf("romanized korean upload lost the lyrics: %q", got)
+	}
+}
+
+func TestKuGouPrefersTheStudioTakeAndItsTiming(t *testing.T) {
+	req := Request{Artist: "DragonForce", Title: "Fields Of Despair", Duration: 325 * time.Second}
+	songs := kugouSongsFor(req, []kugouSong{
+		{Name: "Fields Of Despair (Live)", Singers: "DragonForce", Hash: "live", Duration: 331},
+		{Name: "Fields Of Despair", Singers: "DragonForce", Hash: "studio", Duration: 325},
+		{Name: "Fields of Despair", Singers: "DragonForce", Hash: "long", Duration: 355},
+	})
+	if len(songs) != 2 || songs[0].Hash != "studio" {
+		t.Fatalf("songs = %+v, want studio first and no 355s cut", songs)
+	}
+	candidate, ok := kugouPick(req, []kugouCandidate{
+		{ID: "long", Song: "Fields of Despair", Singers: "DragonForce", Duration: 355000},
+		{ID: "live", Song: "Fields Of Despair", Singers: "DragonForce", Duration: 331520},
+		{ID: "studio", Song: "Fields Of Despair", Singers: "DragonForce", Duration: 325172},
+	})
+	if !ok || candidate.ID != "studio" {
+		t.Fatalf("candidate = %+v, want studio", candidate)
+	}
+	if _, ok := kugouPick(req, []kugouCandidate{{ID: "long", Song: "Fields of Despair", Singers: "DragonForce", Duration: 355000}}); ok {
+		t.Fatal("picked lyrics timed for a 355s recording")
 	}
 }
