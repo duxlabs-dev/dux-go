@@ -66,7 +66,7 @@ func (c *Client) fetchYouTubeMusic(ctx context.Context, req Request) (*Lyrics, e
 	if err != nil {
 		return nil, err
 	}
-	videoID := youtubeVideoID(search, req)
+	videoID, seconds := youtubeVideoID(search, req)
 	if videoID == "" {
 		return nil, errNotFound
 	}
@@ -94,7 +94,11 @@ func (c *Client) fetchYouTubeMusic(ctx context.Context, req Request) (*Lyrics, e
 	if err := json.Unmarshal(found[0], &rows); err != nil {
 		return nil, err
 	}
-	return decodeYouTubeMusic(rows)
+	lyrics, err := decodeYouTubeMusic(rows)
+	if err == nil && lyrics.DurationMS == 0 {
+		lyrics.DurationMS = int64(seconds) * 1000
+	}
+	return lyrics, err
 }
 
 func (c *Client) youtube(ctx context.Context, endpoint, fields string, body youtubeRequest) (json.RawMessage, error) {
@@ -120,7 +124,9 @@ func (c *Client) youtube(ctx context.Context, endpoint, fields string, body yout
 	return payload, decodeJSON(response, &payload)
 }
 
-func youtubeVideoID(search json.RawMessage, req Request) string {
+// Search lists music videos with intro footage next to the album track, so the closest length wins.
+func youtubeVideoID(search json.RawMessage, req Request) (string, int) {
+	bestID, bestSeconds := "", 0
 	for _, song := range dig(search, youtubeSongs) {
 		columns := dig(song, youtubeColumns)
 		if len(columns) < 2 {
@@ -129,11 +135,15 @@ func youtubeVideoID(search json.RawMessage, req Request) string {
 		title := strings.Join(digStrings(columns[0], "text.runs.text"), "")
 		details := digStrings(columns[1], "text.runs.text")
 		videoID := digString(song, "playlistItemData.videoId")
-		if videoID != "" && req.matchesDuration(youtubeSeconds(details)) && req.matchesTrack(title, youtubeArtists(details)) {
-			return videoID
+		seconds := youtubeSeconds(details)
+		if videoID == "" || !req.matchesDuration(seconds) || !req.matchesTrack(title, youtubeArtists(details)) {
+			continue
+		}
+		if bestID == "" || req.durationGap(seconds) < req.durationGap(bestSeconds) {
+			bestID, bestSeconds = videoID, seconds
 		}
 	}
-	return ""
+	return bestID, bestSeconds
 }
 
 // Search localizes names: with hl=en 米津玄師 comes back as "Kenshi Yonezu" and 아이유 as "IU".

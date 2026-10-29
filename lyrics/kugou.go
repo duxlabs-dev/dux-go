@@ -9,6 +9,7 @@ import (
 	"html"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,8 @@ type kugouCandidate struct {
 	AccessKey string `json:"accesskey"`
 	Song      string `json:"song"`
 	Singers   string `json:"singer"`
+	// Milliseconds of the recording the lyrics were timed against.
+	Duration int64 `json:"duration"`
 }
 
 // KRC carries word timing, LRC only lines.
@@ -51,10 +54,14 @@ func (c *Client) fetchKuGou(ctx context.Context, req Request) (*Lyrics, error) {
 	if err != nil {
 		return nil, err
 	}
-	if found, err := c.kugouDownload(ctx, req, candidate, "krc", decodeKRC); err == nil && !found.Empty() {
-		return found, nil
+	found, err := c.kugouDownload(ctx, req, candidate, "krc", decodeKRC)
+	if err != nil || found.Empty() {
+		found, err = c.kugouDownload(ctx, req, candidate, "lrc", ParseLRC)
 	}
-	return c.kugouDownload(ctx, req, candidate, "lrc", ParseLRC)
+	if err == nil && found.DurationMS == 0 {
+		found.DurationMS = candidate.Duration
+	}
+	return found, err
 }
 
 func (c *Client) kugouCandidate(ctx context.Context, req Request) (kugouCandidate, error) {
@@ -68,10 +75,7 @@ func (c *Client) kugouCandidate(ctx context.Context, req Request) (kugouCandidat
 	if err := c.getJSON(ctx, kugouSongsURL, query, 4*time.Second, &songs); err != nil {
 		return kugouCandidate{}, err
 	}
-	for _, song := range songs.Data.Info {
-		if !req.matchesDuration(song.Duration) || !kugouMatches(req, song.Name, song.Singers) {
-			continue
-		}
+	for _, song := range kugouSongsFor(req, songs.Data.Info) {
 		candidate, err := c.kugouSearch(ctx, req, url.Values{"hash": {song.Hash}})
 		if !errors.Is(err, errNotFound) {
 			return candidate, err
@@ -95,12 +99,46 @@ func (c *Client) kugouSearch(ctx context.Context, req Request, query url.Values)
 	if err := c.getJSON(ctx, kugouSearchURL, query, 4*time.Second, &payload); err != nil {
 		return kugouCandidate{}, err
 	}
-	for _, candidate := range payload.Candidates {
-		if kugouMatches(req, candidate.Song, candidate.Singers) {
-			return candidate, nil
-		}
+	if candidate, ok := kugouPick(req, payload.Candidates); ok {
+		return candidate, nil
 	}
 	return kugouCandidate{}, errNotFound
+}
+
+// Search ranks "(Live)" cuts next to the studio take, and a hash's lyric candidates
+// include uploads timed against other recordings.
+func kugouSongsFor(req Request, songs []kugouSong) []kugouSong {
+	var matched []kugouSong
+	for _, song := range songs {
+		if req.matchesDuration(song.Duration) && kugouMatches(req, song.Name, song.Singers) {
+			matched = append(matched, song)
+		}
+	}
+	slices.SortStableFunc(matched, func(a, b kugouSong) int {
+		if req.addsNote(a.Name) != req.addsNote(b.Name) {
+			return boolOrder(!req.addsNote(a.Name))
+		}
+		return req.durationGap(a.Duration) - req.durationGap(b.Duration)
+	})
+	return matched
+}
+
+func kugouPick(req Request, candidates []kugouCandidate) (kugouCandidate, bool) {
+	var best *kugouCandidate
+	for i := range candidates {
+		candidate := &candidates[i]
+		seconds := int((candidate.Duration + 500) / 1000)
+		if !kugouMatches(req, candidate.Song, candidate.Singers) || (candidate.Duration > 0 && !req.matchesDuration(seconds)) {
+			continue
+		}
+		if best == nil || req.durationGap(seconds) < req.durationGap(int((best.Duration+500)/1000)) {
+			best = candidate
+		}
+	}
+	if best == nil {
+		return kugouCandidate{}, false
+	}
+	return *best, true
 }
 
 func kugouMatches(req Request, title, singers string) bool {

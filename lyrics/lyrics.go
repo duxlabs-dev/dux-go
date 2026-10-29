@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -133,18 +134,13 @@ type providerResponse struct {
 	err    error
 }
 
-// lookupProviders races all providers concurrently while selecting results in
-// caller-specified priority order. Fast lower-priority results are buffered
-// until every provider ahead of them has failed or missed (with timeout considered)
-//
-// Sync outranks priority: word over line over plain. A result wins once nothing still
-// out can beat it. Once priority alone has a winner, the wait for better sync is
-// bounded by syncGrace.
+// lookupProviders races all providers and picks among every result that arrives
+// before the deadline. Once one provider has found lyrics, the wait for the rest
+// is bounded by syncGrace.
 func (c *Client) lookupProviders(ctx context.Context, providers []namedSource, req Request) (*Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	replies := make(chan providerResponse, len(providers))
-	// Start every enabled provider lookup simultaneously, irregardless of priority
 	for index, provider := range providers {
 		go func() {
 			result, err := c.lookupProvider(ctx, provider, req)
@@ -152,37 +148,27 @@ func (c *Client) lookupProviders(ctx context.Context, providers []namedSource, r
 		}()
 	}
 
-	finished := make([]bool, len(providers))
 	results := make([]providerResponse, len(providers))
-	remaining := len(providers)
 	var grace <-chan time.Time
-	for remaining > 0 {
+	for remaining := len(providers); remaining > 0; {
 		select {
 		case <-ctx.Done():
-			// We can get lower-priority results faster than the higher-priority provider results
-			// we wait for the higher priority until the timeout, then return the best one we already got
-			if best, _ := bestFound(results); best != nil {
+			if best := pick(req, results); best != nil {
 				return best, nil
 			}
 			return nil, ctx.Err()
 		case <-grace:
-			best, _ := bestFound(results)
-			return best, nil
+			return pick(req, results), nil
 		case response := <-replies:
-			finished[response.index] = true
 			results[response.index] = response
 			remaining--
 		}
-		best, index := bestFound(results)
-		if best == nil {
-			continue
-		}
-		if !blockedAhead(providers, finished, index, best.tier()) && !upgradePending(providers, finished, index, best.tier()) {
-			return best, nil
-		}
-		if grace == nil && leaderFound(finished, results) {
+		if grace == nil && anyFound(results) {
 			grace = time.After(c.syncGrace)
 		}
+	}
+	if best := pick(req, results); best != nil {
+		return best, nil
 	}
 	// A provider that says "no lyrics" outranks one that merely failed to answer.
 	var lookupErr error
@@ -195,53 +181,8 @@ func (c *Client) lookupProviders(ctx context.Context, providers []namedSource, r
 	return nil, lookupErr
 }
 
-// blockedAhead is a higher-priority provider still out that could answer at the same tier.
-func blockedAhead(providers []namedSource, finished []bool, index, tier int) bool {
-	for i := range index {
-		if !finished[i] && (tier < 2 || providers[i].WordSync) {
-			return true
-		}
-	}
-	return false
-}
-
-// upgradePending is a lower-priority provider still out that could answer at a higher tier.
-func upgradePending(providers []namedSource, finished []bool, index, tier int) bool {
-	for i := index + 1; i < len(providers); i++ {
-		if !finished[i] && (tier == 0 || (tier == 1 && providers[i].WordSync)) {
-			return true
-		}
-	}
-	return false
-}
-
-// leaderFound is whether priority alone already has a winner.
-func leaderFound(finished []bool, results []providerResponse) bool {
-	for i, response := range results {
-		if !finished[i] {
-			return false
-		}
-		if response.result != nil && response.result.Found {
-			return true
-		}
-	}
-	return false
-}
-
-// bestFound is the highest sync tier found so far, priority order breaks ties.
-func bestFound(responses []providerResponse) (*Result, int) {
-	var best *Result
-	index := -1
-	for i, response := range responses {
-		result := response.result
-		if result == nil || !result.Found {
-			continue
-		}
-		if best == nil || result.tier() > best.tier() {
-			best, index = result, i
-		}
-	}
-	return best, index
+func anyFound(results []providerResponse) bool {
+	return slices.ContainsFunc(results, func(r providerResponse) bool { return r.result != nil && r.result.Found })
 }
 
 func (c *Client) lookupProvider(ctx context.Context, provider namedSource, req Request) (*Result, error) {

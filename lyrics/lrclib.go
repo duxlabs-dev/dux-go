@@ -102,7 +102,7 @@ func decodeLrclib(record lrclibRecord) (*Lyrics, error) {
 	if record.Lyricsfile != "" {
 		parsed, err := ParseLyricsfile([]byte(record.Lyricsfile))
 		if err == nil && !parsed.Empty() {
-			return parsed, nil
+			return record.stamp(parsed), nil
 		}
 		lyricsfileErr = err
 	}
@@ -120,5 +120,12 @@ func decodeLrclib(record lrclibRecord) (*Lyrics, error) {
 	if parsed.Empty() && lyricsfileErr != nil {
 		return nil, lyricsfileErr
 	}
-	return parsed, nil
+	return record.stamp(parsed), nil
+}
+
+func (r lrclibRecord) stamp(lyrics *Lyrics) *Lyrics {
+	if lyrics.DurationMS == 0 {
+		lyrics.DurationMS = Seconds(r.Duration).ms()
+	}
+	return lyrics
 }

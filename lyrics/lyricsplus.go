@@ -16,6 +16,7 @@ type lyricsPlusResponse struct {
 			Type  string `json:"type"`
 			Alias string `json:"alias"`
 		} `json:"agents"`
+		TotalDuration string `json:"totalDuration"`
 	} `json:"metadata"`
 }
 
@@ -89,6 +90,9 @@ func decodeLyricsPlus(payload lyricsPlusResponse) (*Lyrics, error) {
 	}
 	sortLines(result.Synced)
 	result.Plain = strings.Join(plain, "\n")
+	if length, err := ttmlSeconds(payload.Metadata.TotalDuration); err == nil {
+		result.DurationMS = length.ms()
+	}
 	return result, nil
 }
 

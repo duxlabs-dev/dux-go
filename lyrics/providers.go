@@ -37,7 +37,7 @@ type Fetcher func(ctx context.Context, req Request) (*Lyrics, error)
 // Source is one provider. The built-in providers are Sources too.
 type Source struct {
 	Attribution Attribution
-	// WordSync marks a source worth holding a line-synced winner for.
+	// Deprecated: ranking compares the lyrics themselves.
 	WordSync bool
 	Fetch    Fetcher
 }
