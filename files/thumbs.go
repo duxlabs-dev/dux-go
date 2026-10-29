@@ -138,17 +138,17 @@ func (t *Thumbs) Generate(e Entry, size string) (string, error) {
 }
 
 func (t *Thumbs) render(e Entry, bound int) (image.Image, error) {
-	if nativeImages[e.Mime] {
-		if e.Size > imageSizeCap {
-			return nil, errors.New("image over the thumbnail size cap")
-		}
+	tool, ok := t.tools.lookup(e.Mime)
+	switch {
+	case ok && (tool.userInstalled || !nativeImages[e.Mime]):
+		return t.external(e, tool, bound)
+	case !nativeImages[e.Mime]:
+		return nil, errors.New("no thumbnailer for " + e.Mime)
+	case e.Size > imageSizeCap:
+		return nil, errors.New("image over the thumbnail size cap")
+	default:
 		return decodeScaled(e.Path, bound)
 	}
-	tool, ok := t.tools.lookup(e.Mime)
-	if !ok {
-		return nil, errors.New("no thumbnailer for " + e.Mime)
-	}
-	return t.external(e, tool, bound)
 }
 
 func (t *Thumbs) external(e Entry, tool thumbnailer, bound int) (image.Image, error) {

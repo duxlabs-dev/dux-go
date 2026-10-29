@@ -1,6 +1,7 @@
 package files
 
 import (
+	"image"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -68,9 +69,7 @@ func TestLoadThumbnailersPrefersDataHomeAndSkipsMissingTools(t *testing.T) {
 	writeThumbnailerEntry(t, systemDir, "absent-exec", "[Thumbnailer Entry]\nExec=/nonexistent/other %i %o\nMimeType=application/x-absent;\n")
 
 	set := &thumbnailers{byMime: map[string]thumbnailer{}}
-	for _, dir := range thumbnailerDirs() {
-		set.loadDir(dir)
-	}
+	set.loadDirs()
 
 	mp4, ok := set.lookup("video/mp4")
 	require.True(t, ok)
@@ -117,6 +116,47 @@ func TestExternalThumbnailerProducesCachedThumbnail(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 128, config.Width)
 	assert.Equal(t, 64, config.Height)
+}
+
+func TestUserThumbnailerOverridesNativeImageDecode(t *testing.T) {
+	homeDir, systemDir := isolatedThumbnailerDirs(t)
+	marker := filepath.Join(t.TempDir(), "marker.png")
+	writeTestPNG(t, marker, 32, 16)
+	user := filepath.Join(t.TempDir(), "user-tool")
+	writeScript(t, user, `cp "`+marker+`" "$2"`)
+	system := filepath.Join(t.TempDir(), "system-tool")
+	writeScript(t, system, "exit 7")
+	writeThumbnailerEntry(t, homeDir, "user", "[Thumbnailer Entry]\nExec="+user+" %i %o %s\nMimeType=image/png;\n")
+	writeThumbnailerEntry(t, systemDir, "system", "[Thumbnailer Entry]\nExec="+system+" %i %o %s\nMimeType=image/png;image/jpeg;\n")
+
+	svc := NewService(&fakeBus{}, t.TempDir(), nil)
+	t.Cleanup(svc.Close)
+	svc.thumbs.bwrap = ""
+
+	source := filepath.Join(t.TempDir(), "photo.png")
+	writeTestPNG(t, source, 400, 200)
+	entry, err := svc.Stat(source)
+	require.NoError(t, err)
+	require.Equal(t, "image/png", entry.Mime)
+
+	dst, err := svc.thumbs.Generate(entry, "normal")
+	require.NoError(t, err)
+	assert.Equal(t, image.Point{X: 32, Y: 16}, pngSize(t, dst), "the user thumbnailer output is served instead of the native decode")
+
+	entry.Mime = "image/jpeg"
+	dst, err = svc.thumbs.Generate(entry, "large")
+	require.NoError(t, err, "a system thumbnailer does not displace the native decoder")
+	assert.Equal(t, image.Point{X: 256, Y: 128}, pngSize(t, dst))
+}
+
+func pngSize(t *testing.T, path string) image.Point {
+	t.Helper()
+	file, err := os.Open(path)
+	require.NoError(t, err)
+	defer file.Close()
+	config, err := png.DecodeConfig(file)
+	require.NoError(t, err)
+	return image.Point{X: config.Width, Y: config.Height}
 }
 
 func TestExternalThumbnailerFailureAndTimeoutLeaveMarker(t *testing.T) {
