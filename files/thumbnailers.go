@@ -16,8 +16,9 @@ import (
 const thumbnailerGroup = "[Thumbnailer Entry]"
 
 type thumbnailer struct {
-	argv         []string
-	outputPrefix bool // the tool appends .png to %o itself
+	argv          []string
+	outputPrefix  bool // the tool appends .png to %o itself
+	userInstalled bool
 }
 
 type thumbJob struct {
@@ -33,15 +34,20 @@ type thumbnailers struct {
 
 func loadThumbnailers() *thumbnailers {
 	set := &thumbnailers{byMime: map[string]thumbnailer{}}
-	for _, dir := range thumbnailerDirs() {
-		set.loadDir(dir)
-	}
+	set.loadDirs()
 	set.addBuiltins()
 	return set
 }
 
-func thumbnailerDirs() []string {
-	dirs := []string{filepath.Join(paths.XDGDataHome(), "thumbnailers")}
+func (t *thumbnailers) loadDirs() {
+	t.loadDir(filepath.Join(paths.XDGDataHome(), "thumbnailers"), true)
+	for _, dir := range systemThumbnailerDirs() {
+		t.loadDir(dir, false)
+	}
+}
+
+func systemThumbnailerDirs() []string {
+	var dirs []string
 	for dir := range strings.SplitSeq(cmp.Or(os.Getenv("XDG_DATA_DIRS"), "/usr/local/share:/usr/share"), ":") {
 		if dir = strings.TrimSpace(dir); dir != "" {
 			dirs = append(dirs, filepath.Join(dir, "thumbnailers"))
@@ -50,7 +56,7 @@ func thumbnailerDirs() []string {
 	return dirs
 }
 
-func (t *thumbnailers) loadDir(dir string) {
+func (t *thumbnailers) loadDir(dir string, userInstalled bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -63,11 +69,11 @@ func (t *thumbnailers) loadDir(dir string) {
 		if err != nil {
 			continue
 		}
-		t.addEntry(parseThumbnailerEntry(data))
+		t.addEntry(parseThumbnailerEntry(data), userInstalled)
 	}
 }
 
-func (t *thumbnailers) addEntry(keys map[string]string) {
+func (t *thumbnailers) addEntry(keys map[string]string, userInstalled bool) {
 	if tryExec := keys["TryExec"]; tryExec != "" && resolveExecutable(tryExec) == "" {
 		return
 	}
@@ -81,7 +87,7 @@ func (t *thumbnailers) addEntry(keys map[string]string) {
 	}
 	for mime := range strings.SplitSeq(keys["MimeType"], ";") {
 		if mime = strings.TrimSpace(mime); mime != "" {
-			t.add(mime, thumbnailer{argv: argv})
+			t.add(mime, thumbnailer{argv: argv, userInstalled: userInstalled})
 		}
 	}
 }
