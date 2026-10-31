@@ -93,6 +93,25 @@ func TestHandleListIncludeHidden(t *testing.T) {
 	assert.Len(t, resultOf(t, out)["entries"], 1)
 }
 
+func TestHandleListHiddenLast(t *testing.T) {
+	svc := newTestService(t)
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".secret"), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "z.txt"), nil, 0o644))
+
+	names := func(params map[string]any) []string {
+		params["path"] = root
+		params["includeHidden"] = "true"
+		var out []string
+		for _, e := range resultOf(t, call(t, svc, ipc.Request{ID: 1, Method: "files.list", Params: params}))["entries"].([]any) {
+			out = append(out, e.(map[string]any)["name"].(string))
+		}
+		return out
+	}
+	assert.Equal(t, []string{".secret", "z.txt"}, names(map[string]any{}))
+	assert.Equal(t, []string{"z.txt", ".secret"}, names(map[string]any{"hiddenLast": "true"}))
+}
+
 func TestHandleErrorsCarryCode(t *testing.T) {
 	svc := newTestService(t)
 

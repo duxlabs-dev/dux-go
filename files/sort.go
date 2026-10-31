@@ -24,9 +24,10 @@ const (
 )
 
 type SortSpec struct {
-	Key       SortKey
-	Desc      bool
-	DirsFirst bool
+	Key        SortKey
+	Desc       bool
+	DirsFirst  bool
+	HiddenLast bool
 }
 
 func ParseSortKey(raw string) SortKey {
@@ -109,21 +110,29 @@ func collationLanguage() language.Tag {
 }
 
 func sortEntries(entries []Entry, spec SortSpec) {
-	slices.SortStableFunc(entries, func(a, b Entry) int {
-		if spec.DirsFirst && a.IsDir != b.IsDir {
-			if a.IsDir {
-				return -1
-			}
+	slices.SortStableFunc(entries, func(a, b Entry) int { return compareEntries(a, b, spec) })
+}
+
+func compareEntries(a, b Entry, spec SortSpec) int {
+	if spec.DirsFirst && a.IsDir != b.IsDir {
+		if a.IsDir {
+			return -1
+		}
+		return 1
+	}
+	if spec.HiddenLast && a.Hidden != b.Hidden {
+		if a.Hidden {
 			return 1
 		}
-		if c := compareBy(a, b, spec.Key); c != 0 {
-			if spec.Desc {
-				return -c
-			}
-			return c
+		return -1
+	}
+	if c := compareBy(a, b, spec.Key); c != 0 {
+		if spec.Desc {
+			return -c
 		}
-		return compareName(a, b)
-	})
+		return c
+	}
+	return compareName(a, b)
 }
 
 func compareBy(a, b Entry, key SortKey) int {
@@ -147,20 +156,6 @@ func compareName(a, b Entry) int {
 }
 
 func insertSorted(entries []Entry, e Entry, spec SortSpec) []Entry {
-	index, _ := slices.BinarySearchFunc(entries, e, func(x, y Entry) int {
-		if spec.DirsFirst && x.IsDir != y.IsDir {
-			if x.IsDir {
-				return -1
-			}
-			return 1
-		}
-		if c := compareBy(x, y, spec.Key); c != 0 {
-			if spec.Desc {
-				return -c
-			}
-			return c
-		}
-		return compareName(x, y)
-	})
+	index, _ := slices.BinarySearchFunc(entries, e, func(x, y Entry) int { return compareEntries(x, y, spec) })
 	return slices.Insert(entries, index, e)
 }

@@ -268,9 +268,10 @@ func listOptions(req ipc.Request) (ListOptions, error) {
 		IncludeHidden: boolParam(req.Params, "includeHidden", false),
 		Filters:       filters,
 		Sort: SortSpec{
-			Key:       ParseSortKey(params.StringOpt(req.Params, "sort", "")),
-			Desc:      boolParam(req.Params, "desc", false),
-			DirsFirst: boolParam(req.Params, "dirsFirst", true),
+			Key:        ParseSortKey(params.StringOpt(req.Params, "sort", "")),
+			Desc:       boolParam(req.Params, "desc", false),
+			DirsFirst:  boolParam(req.Params, "dirsFirst", true),
+			HiddenLast: boolParam(req.Params, "hiddenLast", false),
 		},
 		Limit:  intParam(req.Params, "limit", DefaultPageSize),
 		Cursor: params.StringOpt(req.Params, "cursor", ""),

@@ -74,6 +74,31 @@ func TestParseSortKeyFallsBackToName(t *testing.T) {
 	assert.Equal(t, SortName, ParseSortKey("nonsense"))
 }
 
+func TestHiddenLastGroupsAfterVisible(t *testing.T) {
+	b := newBuilder(nil, nil)
+	entry := func(name string, isDir, hidden bool) Entry {
+		return Entry{Name: name, IsDir: isDir, Hidden: hidden, nameKey: b.keys.key(name)}
+	}
+	entries := []Entry{
+		entry(".config", true, true), entry("b.txt", false, false), entry(".bashrc", false, true),
+		entry("Music", true, false), entry("a.txt", false, false), entry(".cache", true, true),
+		entry("listed", false, true),
+	}
+
+	sortEntries(entries, SortSpec{Key: SortName, HiddenLast: true})
+	assert.Equal(t, []string{"a.txt", "b.txt", "Music", ".bashrc", ".cache", ".config", "listed"}, namesOf(entries))
+
+	grouped := SortSpec{Key: SortName, DirsFirst: true, HiddenLast: true}
+	sortEntries(entries, grouped)
+	assert.Equal(t, []string{"Music", ".cache", ".config", "a.txt", "b.txt", ".bashrc", "listed"}, namesOf(entries))
+
+	entries = insertSorted(entries, entry(".zshrc", false, true), grouped)
+	assert.Equal(t, []string{"Music", ".cache", ".config", "a.txt", "b.txt", ".bashrc", ".zshrc", "listed"}, namesOf(entries))
+
+	sortEntries(entries, SortSpec{Key: SortName, DirsFirst: true, HiddenLast: true, Desc: true})
+	assert.Equal(t, []string{"Music", ".config", ".cache", "b.txt", "a.txt", "listed", ".zshrc", ".bashrc"}, namesOf(entries))
+}
+
 func TestInsertSortedKeepsOrder(t *testing.T) {
 	b := newBuilder(nil, nil)
 	entry := func(name string, isDir bool) Entry {
