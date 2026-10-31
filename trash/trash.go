@@ -46,6 +46,8 @@ func ensureTrashDirs(trashDir string) error {
 	return os.MkdirAll(filepath.Join(trashDir, "info"), 0o700)
 }
 
+type deviceLookup func(path string) (uint64, error)
+
 func fsDevice(path string) (uint64, error) {
 	var st syscall.Stat_t
 	if err := syscall.Lstat(path, &st); err != nil {
@@ -55,9 +57,16 @@ func fsDevice(path string) (uint64, error) {
 }
 
 func fsDeviceWalkUp(start string) (uint64, error) {
+	return fsDeviceWalkUpWithLookup(start, fsDevice)
+}
+
+func fsDeviceWalkUpWithLookup(start string, lookup deviceLookup) (uint64, error) {
+	if lookup == nil {
+		lookup = fsDevice
+	}
 	cur := start
 	for {
-		if dev, err := fsDevice(cur); err == nil {
+		if dev, err := lookup(cur); err == nil {
 			return dev, nil
 		}
 		parent := filepath.Dir(cur)
@@ -68,22 +77,84 @@ func fsDeviceWalkUp(start string) (uint64, error) {
 	}
 }
 
-func findTopDir(path string) (string, error) {
-	abs, err := filepath.Abs(path)
+// effectiveEntryPath returns the path of absPath with its parent directory
+// resolved via filepath.EvalSymlinks. The basename itself is preserved without
+// symlink evaluation so that symlinks being trashed are not dereferenced.
+func effectiveEntryPath(absPath string) (string, error) {
+	parent := filepath.Dir(absPath)
+	resolvedParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return "", fmt.Errorf("resolve parent directory %q: %w", parent, err)
+	}
+	return filepath.Join(resolvedParent, filepath.Base(absPath)), nil
+}
+
+// resolveExistingAncestors resolves symbolic links in the deepest existing ancestor
+// of path and appends any remaining path components.
+func resolveExistingAncestors(p string) string {
+	cur := filepath.Clean(p)
+	var tail []string
+	for {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			for i := len(tail) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, tail[i])
+			}
+			return resolved
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+		tail = append(tail, filepath.Base(cur))
+		cur = parent
+	}
+}
+
+func effectiveMountPoint(path string, mounts []string) (string, bool) {
+	if len(mounts) == 0 {
+		return "", false
+	}
+	cleanPath := filepath.Clean(path)
+	var best string
+	var found bool
+	for _, m := range mounts {
+		cleanM := filepath.Clean(m)
+		if cleanM == "" {
+			continue
+		}
+		var matches bool
+		if cleanM == "/" {
+			matches = strings.HasPrefix(cleanPath, "/")
+		} else {
+			matches = cleanPath == cleanM || strings.HasPrefix(cleanPath, cleanM+"/")
+		}
+		if matches {
+			if !found || len(cleanM) > len(best) {
+				best = cleanM
+				found = true
+			}
+		}
+	}
+	return best, found
+}
+
+// walkDeviceBoundary traverses upward from start until the device reported by
+// lookup changes, returning the top-level directory of that device.
+func walkDeviceBoundary(start string, lookup deviceLookup) (string, error) {
+	if lookup == nil {
+		lookup = fsDevice
+	}
+	dev, err := lookup(start)
 	if err != nil {
 		return "", err
 	}
-	dev, err := fsDevice(abs)
-	if err != nil {
-		return "", err
-	}
-	cur := abs
+	cur := start
 	for {
 		parent := filepath.Dir(cur)
 		if parent == cur {
 			return cur, nil
 		}
-		pdev, err := fsDevice(parent)
+		pdev, err := lookup(parent)
 		if err != nil {
 			return cur, nil
 		}
@@ -92,6 +163,25 @@ func findTopDir(path string) (string, error) {
 		}
 		cur = parent
 	}
+}
+
+func findTopDir(path string) (string, error) {
+	return findTopDirWithLookup(path, fsDevice)
+}
+
+func findTopDirWithLookup(path string, lookup deviceLookup) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	eff, err := effectiveEntryPath(abs)
+	if err != nil {
+		eff = abs
+	}
+	if m, ok := effectiveMountPoint(eff, mountPoints()); ok {
+		return m, nil
+	}
+	return walkDeviceBoundary(eff, lookup)
 }
 
 // isValidSharedTrash enforces the spec's checks on $topdir/.Trash:
@@ -110,44 +200,110 @@ func isValidSharedTrash(p string) bool {
 	return info.Mode()&os.ModeSticky != 0
 }
 
-// trashDirForPath chooses the correct trash dir per spec and returns the value
-// to store in the .trashinfo Path field (absolute for home, relative-to-topdir
-// for per-mountpoint trash).
-func trashDirForPath(absPath string) (trashDir string, storedPath string, err error) {
-	home, err := homeTrashDir()
-	if err != nil {
-		return "", "", err
-	}
-
-	pathDev, err := fsDevice(absPath)
-	if err != nil {
-		return "", "", err
-	}
-	homeDev, err := fsDeviceWalkUp(home)
-	if err != nil {
-		return "", "", err
-	}
-
-	if pathDev == homeDev {
-		return home, absPath, nil
-	}
-
-	topDir, err := findTopDir(absPath)
-	if err != nil {
-		return "", "", err
-	}
-
+func mountTrashDir(topDir, absPath string) (string, string) {
 	uid := strconv.Itoa(os.Getuid())
 	stored, rerr := filepath.Rel(topDir, absPath)
-	if rerr != nil || strings.HasPrefix(stored, "..") {
+	if rerr != nil || stored == "." || strings.HasPrefix(stored, "..") {
 		stored = absPath
 	}
 
 	shared := filepath.Join(topDir, ".Trash")
 	if isValidSharedTrash(shared) {
-		return filepath.Join(shared, uid), stored, nil
+		return filepath.Join(shared, uid), stored
 	}
-	return filepath.Join(topDir, ".Trash-"+uid), stored, nil
+	return filepath.Join(topDir, ".Trash-"+uid), stored
+}
+
+// trashDirForPath chooses the correct trash dir per spec and returns the value
+// to store in the .trashinfo Path field (absolute for home, relative-to-topdir
+// for per-mountpoint trash).
+func trashDirForPath(absPath string) (trashDir string, storedPath string, err error) {
+	return trashDirForPathWithLookup(absPath, fsDevice)
+}
+
+func trashDirForPathWithLookup(absPath string, lookup deviceLookup) (trashDir string, storedPath string, err error) {
+	if lookup == nil {
+		lookup = fsDevice
+	}
+	effPath, err := effectiveEntryPath(absPath)
+	if err != nil {
+		return "", "", err
+	}
+
+	home, err := homeTrashDir()
+	if err != nil {
+		return "", "", err
+	}
+	effHome := resolveExistingAncestors(home)
+
+	mounts := mountPoints()
+
+	srcMount, srcFound := effectiveMountPoint(effPath, mounts)
+	homeMount, homeFound := effectiveMountPoint(effHome, mounts)
+
+	if len(mounts) == 0 {
+		// Mount information is completely unavailable (e.g. non-Linux platform
+		// or unreadable /proc/self/mountinfo). Fall back to device boundary checks.
+		pathDev, err := lookup(effPath)
+		if err != nil {
+			return "", "", err
+		}
+		homeDev, err := fsDeviceWalkUpWithLookup(home, lookup)
+		if err != nil {
+			return "", "", err
+		}
+
+		if pathDev == homeDev {
+			return home, effPath, nil
+		}
+
+		topDir, err := findTopDirWithLookup(effPath, lookup)
+		if err != nil {
+			return "", "", err
+		}
+		td, sp := mountTrashDir(topDir, effPath)
+		return td, sp, nil
+	}
+
+	// Mount information is available.
+	if srcFound && homeFound && srcMount == homeMount {
+		// Both paths reliably map to the same mount.
+		// Verify device numbers as an additional safeguard.
+		pathDev, pathErr := lookup(effPath)
+		homeDev, homeErr := fsDeviceWalkUpWithLookup(home, lookup)
+		if pathErr == nil && homeErr == nil && pathDev != homeDev {
+			topDir, terr := findTopDirWithLookup(effPath, lookup)
+			if terr != nil {
+				return "", "", terr
+			}
+			if topDir == "/" {
+				return "", "", fmt.Errorf("cannot determine trash directory for %s: source mount unknown and fallback reached root", absPath)
+			}
+			td, sp := mountTrashDir(topDir, effPath)
+			return td, sp, nil
+		}
+		return home, effPath, nil
+	}
+
+	if srcFound {
+		// Source mount is known and differs from Home Trash's mount (or Home Trash mount is unknown).
+		td, sp := mountTrashDir(srcMount, effPath)
+		return td, sp, nil
+	}
+
+	// Degraded mount-information case: mount info is non-empty, but the source
+	// path did not match any known mount point. Because mount information does not
+	// establish that both paths share a mount, do not rely on st_dev equality alone
+	// to use Home Trash. Fall back to walking up the source device boundary.
+	topDir, err := findTopDirWithLookup(effPath, lookup)
+	if err != nil {
+		return "", "", err
+	}
+	if topDir == "/" {
+		return "", "", fmt.Errorf("cannot determine trash directory for %s: source mount unknown and fallback reached root", absPath)
+	}
+	td, sp := mountTrashDir(topDir, effPath)
+	return td, sp, nil
 }
 
 // uniqueName returns a basename in trashDir that does not collide with an
@@ -204,6 +360,10 @@ func writeTrashInfo(infoPath, storedPath string, when time.Time) error {
 
 // Put trashes a single file or directory.
 func Put(path string) (Entry, error) {
+	return putWithLookup(path, fsDevice)
+}
+
+func putWithLookup(path string, lookup deviceLookup) (Entry, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return Entry{}, err
@@ -213,7 +373,7 @@ func Put(path string) (Entry, error) {
 		return Entry{}, err
 	}
 
-	trashDir, storedPath, err := trashDirForPath(abs)
+	trashDir, storedPath, err := trashDirForPathWithLookup(abs, lookup)
 	if err != nil {
 		return Entry{}, err
 	}
@@ -285,7 +445,7 @@ func skipFsType(fsType string) bool {
 }
 
 func skipMountPoint(mp string, seen map[string]bool) bool {
-	if mp == "/" || seen[mp] {
+	if mp == "" || seen[mp] {
 		return true
 	}
 	for _, p := range []string{"/proc", "/sys", "/dev"} {
