@@ -36,6 +36,7 @@ done < <(git log --format=%B "${BASE}..origin/${TARGET}" 2>/dev/null |
   grep -oE 'cherry picked from commit [0-9a-f]{40}' | awk '{print $5}')
 
 # git cherry: "+ sha" = not on target (by patch-id), "- sha" = equivalent exists
+port_shas=()
 fixes=""
 others=""
 flagged=""
@@ -58,11 +59,13 @@ while read -r mark sha; do
   if git log -1 --format=%B "$sha" | grep -qiE "$FLAG_RE"; then
     flagged+="${line}"$'\n'
     flagged_count=$((flagged_count + 1))
+    port_shas+=("$short")
   elif grep -qiE '^(fix|hotfix|bugfix)([(:! ]|$)|^[a-z0-9_./-]+: *fix' <<<"$subject"; then
     fixes+="${line}"$'\n'
     fix_count=$((fix_count + 1))
+    port_shas+=("$short")
   else
-    others+="${line#- [ ] }"$'\n'
+    others+="${line}"$'\n'
     other_count=$((other_count + 1))
   fi
 done < <(git cherry "origin/${TARGET}" origin/master "$BASE")
@@ -70,6 +73,11 @@ done < <(git cherry "origin/${TARGET}" origin/master "$BASE")
 FLAGGED_SECTION=""
 if [ "$flagged_count" -gt 0 ]; then
   FLAGGED_SECTION="### :warning: Flagged \"port ${VER}\" but not applied (${flagged_count})"$'\n\n'"${flagged}"
+fi
+
+PORT_COMMAND=""
+if [ "${#port_shas[@]}" -gt 0 ]; then
+  PORT_COMMAND=$'\n### Port command\n\n```sh\n'"scripts/port.sh ${TARGET} ${port_shas[*]}"$'\n```\n'
 fi
 
 REPORT=$(cat <<EOF
@@ -82,15 +90,32 @@ ${FLAGGED_SECTION}
 
 ${fixes:-_none — all caught up_ }
 
-<details><summary>Other unported commits (${other_count}) — held for next major</summary>
+<details><summary>Other possible candidates (${other_count})</summary>
 
 ${others:-none}
 
 </details>
+${PORT_COMMAND}
 EOF
 )
 
-echo "$REPORT"
+plain() { sed 's/^- \[ \] `\([0-9a-f]*\)`/  \1 /' <<<"$1"; }
+
+# markdown is for the step summary, the tracking issue, and pipes; terminals get plain text
+if [ -t 1 ]; then
+  echo "Port audit: ${TARGET} vs master (base $(git rev-parse --short "$BASE"))"
+  if [ "$flagged_count" -gt 0 ]; then
+    printf '\nFlagged "port %s" but not applied (%s):\n%s\n' "$VER" "$flagged_count" "$(plain "$flagged")"
+  fi
+  printf '\nCandidate fixes not ported (%s):\n%s\n' "$fix_count" "$(plain "${fixes:-  none - all caught up}")"
+  printf '\nOther possible candidates (%s):\n%s\n' "$other_count" "$(plain "${others:-  none}")"
+  if [ "${#port_shas[@]}" -gt 0 ]; then
+    printf '\nPort command:\n  scripts/port.sh %s %s\n' "$TARGET" "${port_shas[*]}"
+  fi
+else
+  echo "$REPORT"
+fi
+
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   echo "$REPORT" >> "$GITHUB_STEP_SUMMARY"
 fi
