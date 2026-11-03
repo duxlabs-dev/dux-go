@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestCommandSource(t *testing.T) {
@@ -15,6 +17,7 @@ case "$(cat)" in
 *'"title":"Hit"'*) printf '{"format":"lrc","lyrics":"[00:01.00]hello"}' ;;
 *'"title":"Broken"'*) exit 1 ;;
 *'"title":"Large"'*) head -c 600000 /dev/zero ;;
+*'"title":"Hang"'*) sleep 30 & wait ;;
 esac
 `
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
@@ -38,5 +41,12 @@ esac
 	}
 	if _, err := lookup("Large"); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("oversized output error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := Command(script)(ctx, Request{Artist: "Artist", Title: "Hang"}); err == nil || !strings.Contains(err.Error(), "timed out after 100ms") || time.Since(started) > 5*time.Second {
+		t.Errorf("hanging command = %v after %s", err, time.Since(started))
 	}
 }
