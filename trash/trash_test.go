@@ -1144,3 +1144,34 @@ func TestPutSameMountAmbiguousRootRejection(t *testing.T) {
 		t.Errorf("srcFile content = %q, want %q", string(content), "data-content")
 	}
 }
+
+func TestPutNestedSubvolumeWithinOtherMount(t *testing.T) {
+	setupHomeTrash(t)
+	dataMount := filepath.Join(t.TempDir(), "data")
+	prev := mountPoints
+	mountPoints = func() []string {
+		return []string{"/", dataMount}
+	}
+	t.Cleanup(func() { mountPoints = prev })
+
+	subvol := filepath.Join(dataMount, "proj")
+	srcFile := filepath.Join(subvol, "docs", "file.txt")
+	writeFile(t, srcFile, "subvolume-content")
+
+	mockLookup := func(p string) (uint64, error) {
+		cleanP := filepath.Clean(p)
+		if cleanP == subvol || strings.HasPrefix(cleanP, subvol+"/") {
+			return 200, nil
+		}
+		return 100, nil
+	}
+
+	td, sp, err := trashDirForPathWithLookup(srcFile, mockLookup)
+	if err != nil {
+		t.Fatalf("trashDirForPathWithLookup: %v", err)
+	}
+	wantTrashDir := filepath.Join(subvol, ".Trash-"+strconv.Itoa(os.Getuid()))
+	if td != wantTrashDir || sp != "docs/file.txt" {
+		t.Errorf("trashDir = %q, storedPath = %q, want %q, %q", td, sp, wantTrashDir, "docs/file.txt")
+	}
+}

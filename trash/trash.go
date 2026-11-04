@@ -287,7 +287,15 @@ func trashDirForPathWithLookup(absPath string, lookup deviceLookup) (trashDir st
 
 	if srcFound {
 		// Source mount is known and differs from Home Trash's mount (or Home Trash mount is unknown).
-		td, sp := mountTrashDir(srcMount, effPath)
+		topDir := srcMount
+		pathDev, pathErr := lookup(effPath)
+		mountDev, mountErr := lookup(srcMount)
+		if pathErr == nil && mountErr == nil && pathDev != mountDev {
+			if topDir, err = walkDeviceBoundary(effPath, lookup); err != nil {
+				return "", "", err
+			}
+		}
+		td, sp := mountTrashDir(topDir, effPath)
 		return td, sp, nil
 	}
 
