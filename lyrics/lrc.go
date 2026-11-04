@@ -37,6 +37,7 @@ func ParseLRC(data []byte) (*Lyrics, error) {
 		lines         []Line
 		plain         []string
 		offset        Seconds
+		length        Seconds
 		expandedBytes int
 		expandedWords int
 	)
@@ -49,8 +50,11 @@ func ParseLRC(data []byte) (*Lyrics, error) {
 
 		if len(stamps) == 0 {
 			if name, value, ok := metaTag(raw); ok {
-				if name == "offset" {
+				switch name {
+				case "offset":
 					offset = parseOffset(value)
+				case "length":
+					length, _ = parseStamp(value)
 				}
 				continue
 			}
@@ -102,7 +106,7 @@ func ParseLRC(data []byte) (*Lyrics, error) {
 	}
 	sortLines(lines)
 
-	return &Lyrics{Synced: lines, Plain: strings.Join(plain, "\n"), Source: SourceLRC}, nil
+	return &Lyrics{Synced: lines, Plain: strings.Join(plain, "\n"), DurationMS: length.ms(), Source: SourceLRC}, nil
 }
 
 func shift(value, offset Seconds) Seconds {
