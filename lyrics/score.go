@@ -71,10 +71,10 @@ func pick(req Request, responses []providerResponse) *Result {
 		switch {
 		case a.plausible != b.plausible:
 			return boolOrder(a.plausible)
-		case a.verified != b.verified:
-			return boolOrder(a.verified)
 		case a.timed != b.timed:
 			return boolOrder(a.timed)
+		case a.verified != b.verified:
+			return boolOrder(a.verified)
 		}
 		if bandA, bandB := math.Floor(float64(a.nearest/band)), math.Floor(float64(b.nearest/band)); bandA != bandB {
 			return boolOrder(bandA < bandB)
