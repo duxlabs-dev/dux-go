@@ -25,6 +25,7 @@ func (r *Result) withoutMarkup() *Result {
 	clean.Attribution.Name = strip(r.Attribution.Name)
 	clean.Attribution.Text = strip(r.Attribution.Text)
 	clean.Plain = spaceAfterComma(strip(r.Plain))
+	changed = changed || clean.Plain != r.Plain
 	clean.Title = strip(r.Title)
 	clean.Artist = strip(r.Artist)
 	clean.Album = strip(r.Album)

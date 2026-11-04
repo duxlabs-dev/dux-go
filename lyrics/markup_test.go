@@ -3,6 +3,7 @@ package lyrics
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -86,5 +87,17 @@ func TestSpaceLineCopiesWords(t *testing.T) {
 	}
 	if words[0].Text != "city," {
 		t.Fatalf("source words mutated: %+v", words)
+	}
+}
+
+func TestSpaceAfterCommaDropsVerbatimLyricsfile(t *testing.T) {
+	parsed, err := ParseLyricsfile([]byte("version: '1.0'\nmetadata: {title: t, artist: a}\nplain: |\n  city,baby\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean := (&Result{Lyrics: *parsed}).withoutMarkup()
+	out, err := clean.AsLyricsfile()
+	if err != nil || clean.Plain != "city, baby\n" || !strings.Contains(string(out), "city, baby") {
+		t.Fatalf("plain=%q out=%s err=%v", clean.Plain, out, err)
 	}
 }
