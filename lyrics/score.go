@@ -8,14 +8,17 @@ import (
 )
 
 const (
-	endSlack      Seconds = 3
-	minAgreeLines         = 3
+	endSlack Seconds = 3
 	// Catalogs round lengths to whole seconds, so short tracks need the floor.
-	lengthShare            = 0.01
 	minLengthSlack Seconds = 2
-	// Gaps within one band count as agreement, so provider order decides between them.
-	agreeBandShare         = 0.001
 	minAgreeBand   Seconds = 0.25
+)
+
+const (
+	minAgreeLines = 3
+	lengthShare   = 0.01
+	// Gaps within one band count as agreement, so provider order decides between them.
+	agreeBandShare = 0.001
 	// Bounds the LCS table, which is quadratic in line count, against oversized provider responses.
 	maxAlignCells = 250_000
 )
