@@ -42,6 +42,10 @@ func milliseconds(ms int64) Seconds {
 	return Seconds(float64(ms) / 1000)
 }
 
+func (s Seconds) ms() int64 {
+	return int64(math.Round(float64(s) * 1000))
+}
+
 func (s Seconds) finite() bool {
 	return !math.IsInf(float64(s), 0) && !math.IsNaN(float64(s))
 }
@@ -164,17 +168,6 @@ func (l *Lyrics) timed() bool {
 	})
 }
 
-// tier is 2 for word sync, 1 for line sync or instrumental, 0 for plain text.
-func (l *Lyrics) tier() int {
-	switch {
-	case l.wordSynced():
-		return 2
-	case len(l.Synced) > 0 || l.Instrumental:
-		return 1
-	}
-	return 0
-}
-
 func (l *Lyrics) wordSynced() bool {
 	return slices.ContainsFunc(l.Synced, func(line Line) bool { return len(line.Words) > 0 })
 }
@@ -240,6 +233,17 @@ func searchable(text string) string {
 	return strings.Join(strings.FieldsFunc(text, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
 	}), " ")
+}
+
+// addsNote is a bracketed note like "(Live)" in title that the requested title lacks.
+func (r Request) addsNote(title string) bool {
+	want := strings.ToLower(r.Title)
+	for _, note := range bracketed.FindAllString(strings.ToLower(title), -1) {
+		if !strings.Contains(want, strings.Trim(note, "()[]（）【】")) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsWords(text, words string) bool {

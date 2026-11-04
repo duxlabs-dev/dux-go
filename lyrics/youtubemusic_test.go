@@ -18,10 +18,11 @@ func TestYouTubeMusicPicksTheMatchingSong(t *testing.T) {
 		song("", `Dat New "New"`, "Kid Cudi", "4:15") + `,` +
 		song("cudizone", "Cudi Zone", "Kid Cudi", "4:20") + `,` +
 		song("remix", "Dat new new (Remix)", "DCG", "4:15") + `,` +
+		song("video", `Dat New "New"`, "Kid Cudi", "4:21") + `,` +
 		song("original", `Dat New "New"`, "Kid Cudi", "4:15") + `]}}]}}}}]}}}`)
 	req := Request{Title: `Kid Cudi - Dat New "New" (Dirty)`, Artist: "Fool's Gold Records", Duration: 255 * time.Second}
-	if got := youtubeVideoID(search, req); got != "original" {
-		t.Fatalf("picked %q", got)
+	if got, seconds := youtubeVideoID(search, req); got != "original" || seconds != 255 {
+		t.Fatalf("picked %q at %ds", got, seconds)
 	}
 
 	next := json.RawMessage(`{"contents":{"singleColumnMusicWatchNextResultsRenderer":{"tabbedRenderer":{"watchNextTabbedResultsRenderer":{"tabs":[` +
