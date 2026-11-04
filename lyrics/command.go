@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"syscall"
@@ -42,6 +43,7 @@ func Command(name string, args ...string) Fetcher {
 		ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 		defer cancel()
 
+		started := time.Now()
 		var stdout boundedBuffer
 		cmd := exec.CommandContext(ctx, name, args...)
 		cmd.Stdin = bytes.NewReader(query)
@@ -50,10 +52,15 @@ func Command(name string, args ...string) Fetcher {
 		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 		cmd.WaitDelay = time.Second
 		err = cmd.Run()
-		if stdout.overflowed {
+		deadline, _ := ctx.Deadline()
+		switch {
+		case err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded):
+			return nil, fmt.Errorf("timed out after %s: %w", deadline.Sub(started).Round(time.Millisecond), ctx.Err())
+		case err != nil && ctx.Err() != nil:
+			return nil, ctx.Err()
+		case stdout.overflowed:
 			return nil, ErrTooLarge
-		}
-		if err != nil {
+		case err != nil:
 			return nil, err
 		}
 		return decodeCommand(stdout.data)
