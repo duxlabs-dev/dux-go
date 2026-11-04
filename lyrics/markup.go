@@ -2,7 +2,10 @@ package lyrics
 
 import (
 	"regexp"
+	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Per the WHATWG tag open state, "<" starts markup only before an ASCII letter, "/", "!" or "?".
@@ -48,10 +51,33 @@ func (r *Result) withoutMarkup() *Result {
 // commaSpace matches a comma glued to the following word. Providers leave that space out for both
 // forms: KuGou returns "I'm in your city,b***h" for English and "天黑了，我想你了" for Chinese.
 // Periods are deliberately excluded: they occur inside abbreviations, filenames and versions.
-var commaSpace = regexp.MustCompile(`([，,])([^\s\p{P}])`)
+var commaSpace = regexp.MustCompile(`[，,][^\s\p{P}]`)
 
 func spaceAfterComma(text string) string {
-	return commaSpace.ReplaceAllString(text, "$1 $2")
+	matches := commaSpace.FindAllStringIndex(text, -1)
+	if matches == nil {
+		return text
+	}
+	var spaced strings.Builder
+	from := 0
+	for _, match := range matches {
+		_, commaSize := utf8.DecodeRuneInString(text[match[0]:])
+		split := match[0] + commaSize
+		if betweenDigits(text[:match[0]], text[split:]) {
+			continue
+		}
+		spaced.WriteString(text[from:split])
+		spaced.WriteByte(' ')
+		from = split
+	}
+	spaced.WriteString(text[from:])
+	return spaced.String()
+}
+
+func betweenDigits(before, after string) bool {
+	last, _ := utf8.DecodeLastRuneInString(before)
+	first, _ := utf8.DecodeRuneInString(after)
+	return unicode.IsDigit(last) && unicode.IsDigit(first)
 }
 
 // spaceLine adds the comma spacing to a line and its words. A comma often ends one word while the
@@ -62,9 +88,10 @@ func spaceLine(line Line) Line {
 		line.Text = spaceAfterComma(line.Text)
 		return line
 	}
+	line.Words = slices.Clone(line.Words)
 	for i := range line.Words {
 		line.Words[i].Text = spaceAfterComma(line.Words[i].Text)
-		if i+1 < len(line.Words) && gluedComma(line.Words[i].Text) && !strings.HasPrefix(line.Words[i+1].Text, " ") {
+		if i+1 < len(line.Words) && gluedComma(line.Words[i].Text, line.Words[i+1].Text) {
 			line.Words[i].Text += " "
 		}
 	}
@@ -72,8 +99,12 @@ func spaceLine(line Line) Line {
 	return line
 }
 
-func gluedComma(text string) bool {
-	return strings.HasSuffix(text, "，") || strings.HasSuffix(text, ",")
+func gluedComma(word, next string) bool {
+	before, ok := strings.CutSuffix(word, ",")
+	if !ok {
+		before, ok = strings.CutSuffix(word, "，")
+	}
+	return ok && !strings.HasPrefix(next, " ") && !betweenDigits(before, next)
 }
 
 func stripMarkup(text string) string {

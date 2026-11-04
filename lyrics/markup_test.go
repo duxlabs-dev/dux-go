@@ -61,3 +61,30 @@ func TestLookupStripsMarkup(t *testing.T) {
 		t.Fatalf("source words mutated: %+v", words)
 	}
 }
+
+func TestSpaceAfterComma(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"in your city,baby", "in your city, baby"},
+		{"天黑了，我想你了", "天黑了， 我想你了"},
+		{"one, two", "one, two"},
+		{"wait,...", "wait,..."},
+		{"50,000 people", "50,000 people"},
+		{"1,2,3,go", "1,2,3, go"},
+		{"10,baby", "10, baby"},
+	} {
+		if got := spaceAfterComma(tc.in); got != tc.want {
+			t.Errorf("spaceAfterComma(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestSpaceLineCopiesWords(t *testing.T) {
+	words := []Word{{Start: 1, Text: "city,"}, {Start: 2, Text: "baby "}, {Start: 3, Text: "50,"}, {Start: 4, Text: "000"}}
+	got := spaceLine(Line{Text: joinWords(words), Words: words})
+	if got.Text != "city, baby 50,000" || joinWords(got.Words) != got.Text {
+		t.Fatalf("got %+v", got)
+	}
+	if words[0].Text != "city," {
+		t.Fatalf("source words mutated: %+v", words)
+	}
+}
