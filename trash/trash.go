@@ -272,7 +272,7 @@ func trashDirForPathWithLookup(absPath string, lookup deviceLookup) (trashDir st
 		pathDev, pathErr := lookup(effPath)
 		homeDev, homeErr := fsDeviceWalkUpWithLookup(home, lookup)
 		if pathErr == nil && homeErr == nil && pathDev != homeDev {
-			topDir, terr := findTopDirWithLookup(effPath, lookup)
+			topDir, terr := walkDeviceBoundary(effPath, lookup)
 			if terr != nil {
 				return "", "", terr
 			}

@@ -997,3 +997,150 @@ func TestEffectiveEntryPathErrorOnNonExistentParent(t *testing.T) {
 		t.Fatalf("expected error for non-existent parent directory, got nil")
 	}
 }
+
+func TestPutNestedSubvolumeWithinMatchedMount(t *testing.T) {
+	tmp := t.TempDir()
+	baseMount := filepath.Join(tmp, "mount")
+	homeRoot := filepath.Join(baseMount, "home", "user")
+	xdg := filepath.Join(homeRoot, ".local", "share")
+	if err := os.MkdirAll(xdg, 0o700); err != nil {
+		t.Fatalf("mkdir xdg: %v", err)
+	}
+	t.Setenv("XDG_DATA_HOME", xdg)
+	t.Setenv("HOME", homeRoot)
+
+	// In mountPoints, both home and the nested subvolume match baseMount.
+	// We also include "/" to reflect standard system mountinfo.
+	prev := mountPoints
+	mountPoints = func() []string {
+		return []string{"/", baseMount}
+	}
+	t.Cleanup(func() { mountPoints = prev })
+
+	// The source resides under a nested directory representing a Btrfs subvolume.
+	subvol := filepath.Join(baseMount, "subvolumes", "project")
+	srcFile := filepath.Join(subvol, "docs", "file.txt")
+	writeFile(t, srcFile, "subvolume-content")
+
+	// The nested subvolume has a different simulated st_dev from its parent and home.
+	cleanSubvol := filepath.Clean(subvol)
+	mockLookup := func(p string) (uint64, error) {
+		cleanP := filepath.Clean(p)
+		if cleanP == cleanSubvol || strings.HasPrefix(cleanP, cleanSubvol+"/") {
+			return 200, nil
+		}
+		return 100, nil
+	}
+
+	uid := strconv.Itoa(os.Getuid())
+	expectedTrashDir := filepath.Join(subvol, ".Trash-"+uid)
+	expectedStoredPath := "docs/file.txt"
+
+	td, sp, err := trashDirForPathWithLookup(srcFile, mockLookup)
+	if err != nil {
+		t.Fatalf("trashDirForPathWithLookup: %v", err)
+	}
+	if td != expectedTrashDir {
+		t.Errorf("trashDir = %q, want %q", td, expectedTrashDir)
+	}
+	if sp != expectedStoredPath {
+		t.Errorf("storedPath = %q, want %q", sp, expectedStoredPath)
+	}
+
+	entry, err := putWithLookup(srcFile, mockLookup)
+	if err != nil {
+		t.Fatalf("putWithLookup: %v", err)
+	}
+	if entry.TrashDir != expectedTrashDir {
+		t.Errorf("entry.TrashDir = %q, want %q", entry.TrashDir, expectedTrashDir)
+	}
+	if entry.OriginalPath != expectedStoredPath {
+		t.Errorf("entry.OriginalPath = %q, want %q", entry.OriginalPath, expectedStoredPath)
+	}
+
+	// Verify file was moved out of original location
+	if _, err := os.Stat(srcFile); !os.IsNotExist(err) {
+		t.Errorf("source still exists at %s", srcFile)
+	}
+
+	// Verify content in trash
+	body, err := os.ReadFile(entry.FilesPath)
+	if err != nil {
+		t.Fatalf("read trashed file: %v", err)
+	}
+	if string(body) != "subvolume-content" {
+		t.Errorf("trashed content = %q, want %q", string(body), "subvolume-content")
+	}
+
+	// Verify .trashinfo path encoding preserves relative path to subvolume root
+	infoBody, err := os.ReadFile(entry.InfoPath)
+	if err != nil {
+		t.Fatalf("read info: %v", err)
+	}
+	wantPathLine := "Path=docs/file.txt\n"
+	if !strings.Contains(string(infoBody), wantPathLine) {
+		t.Errorf("expected %q in .trashinfo, got:\n%s", wantPathLine, string(infoBody))
+	}
+
+	// Verify Restore restores back to original location with contents intact
+	if err := Restore(entry.Name, entry.TrashDir); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	restoredBody, err := os.ReadFile(srcFile)
+	if err != nil {
+		t.Fatalf("read restored: %v", err)
+	}
+	if string(restoredBody) != "subvolume-content" {
+		t.Errorf("restored content = %q, want %q", string(restoredBody), "subvolume-content")
+	}
+}
+
+func TestPutSameMountAmbiguousRootRejection(t *testing.T) {
+	tmp := t.TempDir()
+	baseMount := filepath.Join(tmp, "mount")
+	homeRoot := filepath.Join(baseMount, "home", "user")
+	xdg := filepath.Join(homeRoot, ".local", "share")
+	if err := os.MkdirAll(xdg, 0o700); err != nil {
+		t.Fatalf("mkdir xdg: %v", err)
+	}
+	t.Setenv("XDG_DATA_HOME", xdg)
+	t.Setenv("HOME", homeRoot)
+
+	prev := mountPoints
+	mountPoints = func() []string {
+		return []string{"/", baseMount}
+	}
+	t.Cleanup(func() { mountPoints = prev })
+
+	srcFile := filepath.Join(baseMount, "data", "file.txt")
+	writeFile(t, srcFile, "data-content")
+
+	// Injected device lookup: Home Trash path returns 100, but srcFile and all
+	// ancestors up to root return 200, so walkDeviceBoundary() reaches "/".
+	cleanHome := filepath.Clean(homeRoot)
+	mockLookup := func(p string) (uint64, error) {
+		cleanP := filepath.Clean(p)
+		if cleanP == cleanHome || strings.HasPrefix(cleanP, cleanHome+"/") {
+			return 100, nil
+		}
+		return 200, nil
+	}
+
+	td, _, err := trashDirForPathWithLookup(srcFile, mockLookup)
+	if err == nil {
+		t.Fatalf("expected error when same-mount fallback reaches root, got trashDir=%q", td)
+	}
+
+	if _, err := putWithLookup(srcFile, mockLookup); err == nil {
+		t.Fatalf("Put: expected error when same-mount fallback reaches root, got nil")
+	}
+
+	// Verify srcFile was not moved or deleted
+	content, err := os.ReadFile(srcFile)
+	if err != nil {
+		t.Fatalf("read srcFile: %v", err)
+	}
+	if string(content) != "data-content" {
+		t.Errorf("srcFile content = %q, want %q", string(content), "data-content")
+	}
+}
