@@ -1,6 +1,12 @@
 package lyrics
 
-import "regexp"
+import (
+	"regexp"
+	"slices"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 // Per the WHATWG tag open state, "<" starts markup only before an ASCII letter, "/", "!" or "?".
 var (
@@ -18,14 +24,15 @@ func (r *Result) withoutMarkup() *Result {
 	}
 	clean.Attribution.Name = strip(r.Attribution.Name)
 	clean.Attribution.Text = strip(r.Attribution.Text)
-	clean.Plain = strip(r.Plain)
+	clean.Plain = spaceAfterComma(strip(r.Plain))
+	changed = changed || clean.Plain != r.Plain
 	clean.Title = strip(r.Title)
 	clean.Artist = strip(r.Artist)
 	clean.Album = strip(r.Album)
 	if r.Synced != nil {
 		clean.Synced = make([]Line, len(r.Synced))
 		for i, line := range r.Synced {
-			clean.Synced[i] = stripLine(line)
+			clean.Synced[i] = spaceLine(stripLine(line))
 			changed = changed || clean.Synced[i].Text != line.Text
 		}
 	}
@@ -40,6 +47,65 @@ func (r *Result) withoutMarkup() *Result {
 		clean.raw = nil
 	}
 	return &clean
+}
+
+// commaSpace matches a comma glued to the following word. Providers leave that space out for both
+// forms: KuGou returns "I'm in your city,b***h" for English and "天黑了，我想你了" for Chinese.
+// Periods are deliberately excluded: they occur inside abbreviations, filenames and versions.
+var commaSpace = regexp.MustCompile(`[，,][^\s\p{P}]`)
+
+func spaceAfterComma(text string) string {
+	matches := commaSpace.FindAllStringIndex(text, -1)
+	if matches == nil {
+		return text
+	}
+	var spaced strings.Builder
+	from := 0
+	for _, match := range matches {
+		_, commaSize := utf8.DecodeRuneInString(text[match[0]:])
+		split := match[0] + commaSize
+		if betweenDigits(text[:match[0]], text[split:]) {
+			continue
+		}
+		spaced.WriteString(text[from:split])
+		spaced.WriteByte(' ')
+		from = split
+	}
+	spaced.WriteString(text[from:])
+	return spaced.String()
+}
+
+func betweenDigits(before, after string) bool {
+	last, _ := utf8.DecodeLastRuneInString(before)
+	first, _ := utf8.DecodeRuneInString(after)
+	return unicode.IsDigit(last) && unicode.IsDigit(first)
+}
+
+// spaceLine adds the comma spacing to a line and its words. A comma often ends one word while the
+// next word opens a new clause, so the space goes at the end of the word carrying the mark; the line
+// text is then rebuilt from the words to keep the documented Line.Text == joinWords(Words).
+func spaceLine(line Line) Line {
+	if len(line.Words) == 0 {
+		line.Text = spaceAfterComma(line.Text)
+		return line
+	}
+	line.Words = slices.Clone(line.Words)
+	for i := range line.Words {
+		line.Words[i].Text = spaceAfterComma(line.Words[i].Text)
+		if i+1 < len(line.Words) && gluedComma(line.Words[i].Text, line.Words[i+1].Text) {
+			line.Words[i].Text += " "
+		}
+	}
+	line.Text = joinWords(line.Words)
+	return line
+}
+
+func gluedComma(word, next string) bool {
+	before, ok := strings.CutSuffix(word, ",")
+	if !ok {
+		before, ok = strings.CutSuffix(word, "，")
+	}
+	return ok && !strings.HasPrefix(next, " ") && !betweenDigits(before, next)
 }
 
 func stripMarkup(text string) string {
