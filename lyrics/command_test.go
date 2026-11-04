@@ -46,7 +46,7 @@ esac
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	if _, err := Command(script)(ctx, Request{Artist: "Artist", Title: "Hang"}); err == nil || !strings.Contains(err.Error(), "timed out after 100ms") || time.Since(started) > 5*time.Second {
+	if _, err := Command(script)(ctx, Request{Artist: "Artist", Title: "Hang"}); !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "timed out after") || time.Since(started) > 5*time.Second {
 		t.Errorf("hanging command = %v after %s", err, time.Since(started))
 	}
 }
