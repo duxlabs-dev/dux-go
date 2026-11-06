@@ -6,6 +6,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/log v1.0.0
 	github.com/danielgtaylor/huma/v2 v2.38.0
+	github.com/ebitengine/purego v0.11.3
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/godbus/dbus/v5 v5.2.2
