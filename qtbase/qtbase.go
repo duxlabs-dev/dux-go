@@ -1,29 +1,52 @@
-// Package qtbase runs the quickshell command line from the dux-qt-base
-// library linked into this binary. The UI still runs as its own process:
-// Command re-executes this binary with the Subcommand marker, which
-// MaybeRunAndExit routes into the library before anything else starts.
+// Package qtbase locates the quickshell runtime executable built by
+// dux-qt-base. The host binary stays pure Go, so a plain CLI call never maps
+// the Qt stack; only the UI process pays for it.
 //
-// Builds without cgo (or with the noqtbase tag) fall back to a qs binary on
-// PATH, which keeps CGO_ENABLED=0 release artifacts working.
+// The runtime is looked up next to the host executable, then on PATH.
 package qtbase
 
-import "os"
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+)
 
-// Subcommand marks a re-exec of this binary that should run the runtime.
-const Subcommand = "qs"
+const Binary = "dux-qt-base"
 
-// crashRelaunch is set when quickshell's crash handler re-execs
-// /proc/self/exe with no arguments and state in the environment.
-func crashRelaunch() bool {
-	return os.Getenv("__QUICKSHELL_CRASH_INFO_FD") != "" || os.Getenv("__QUICKSHELL_CRASH_DUMP_FD") != ""
+// Path returns the resolved runtime executable, cached for the process.
+var Path = sync.OnceValues(func() (string, error) {
+	return resolve(executableDir(), exec.LookPath)
+})
+
+func Command(ctx context.Context, args ...string) *exec.Cmd {
+	path, err := Path()
+	if err != nil {
+		cmd := exec.CommandContext(ctx, Binary, args...)
+		cmd.Err = err
+		return cmd
+	}
+	return exec.CommandContext(ctx, path, args...)
 }
 
-func runtimeArgs(args []string) ([]string, bool) {
-	if len(args) > 1 && args[1] == Subcommand {
-		return append([]string{Subcommand}, args[2:]...), true
+func executableDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
 	}
-	if crashRelaunch() {
-		return []string{Subcommand}, true
+	return filepath.Dir(exe)
+}
+
+func resolve(exeDir string, lookPath func(string) (string, error)) (string, error) {
+	if exeDir != "" {
+		if path, err := lookPath(filepath.Join(exeDir, Binary)); err == nil {
+			return path, nil
+		}
 	}
-	return nil, false
+	if path, err := lookPath(Binary); err == nil {
+		return path, nil
+	}
+	return "", fmt.Errorf("%s not found next to this executable or on PATH", Binary)
 }
