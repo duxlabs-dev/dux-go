@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/duxlabs-dev/dux-go/log"
+	"github.com/duxlabs-dev/dux-go/qtbase"
 )
 
 // uiWaitDelay bounds Wait after qs exits: processes qs forks (PAM
@@ -45,7 +46,7 @@ func appendQtEnv(env []string) []string {
 }
 
 func (a *App) buildUICommand(ctx context.Context, socketPath string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "qs", "-p", a.configPath)
+	cmd := qtbase.Command(ctx, "-p", a.configPath)
 	cmd.WaitDelay = uiWaitDelay
 	env := append(os.Environ(),
 		a.cfg.EnvPrefix+"_SOCKET="+socketPath,

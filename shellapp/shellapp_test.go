@@ -208,7 +208,7 @@ func TestBuildUICommandEnv(t *testing.T) {
 
 	cmd := a.buildUICommand(context.Background(), "/run/danktest-1.sock")
 
-	assert.Equal(t, []string{"qs", "-p", "/some/shell"}, cmd.Args)
+	assert.Equal(t, []string{"-p", "/some/shell"}, cmd.Args[len(cmd.Args)-2:])
 	env := strings.Join(cmd.Env, "\n")
 	assert.Contains(t, env, "DANKTEST_SOCKET=/run/danktest-1.sock")
 	assert.Contains(t, env, "QS_APP_ID=dev.duxlabs.danktest")
