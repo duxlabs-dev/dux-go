@@ -214,6 +214,15 @@ func mountTrashDir(topDir, absPath string) (string, string) {
 	return filepath.Join(topDir, ".Trash-"+uid), stored
 }
 
+// GLib and KIO compare against $HOME itself, so a Trash dir on its own device cannot push all of home into $topdir/.Trash-$uid.
+func homeAnchor(trashDir string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return trashDir
+	}
+	return home
+}
+
 // trashDirForPath chooses the correct trash dir per spec and returns the value
 // to store in the .trashinfo Path field (absolute for home, relative-to-topdir
 // for per-mountpoint trash).
@@ -234,7 +243,8 @@ func trashDirForPathWithLookup(absPath string, lookup deviceLookup) (trashDir st
 	if err != nil {
 		return "", "", err
 	}
-	effHome := resolveExistingAncestors(home)
+	anchor := homeAnchor(home)
+	effHome := resolveExistingAncestors(anchor)
 
 	mounts := mountPoints()
 
@@ -248,7 +258,7 @@ func trashDirForPathWithLookup(absPath string, lookup deviceLookup) (trashDir st
 		if err != nil {
 			return "", "", err
 		}
-		homeDev, err := fsDeviceWalkUpWithLookup(home, lookup)
+		homeDev, err := fsDeviceWalkUpWithLookup(anchor, lookup)
 		if err != nil {
 			return "", "", err
 		}
@@ -270,7 +280,7 @@ func trashDirForPathWithLookup(absPath string, lookup deviceLookup) (trashDir st
 		// Both paths reliably map to the same mount.
 		// Verify device numbers as an additional safeguard.
 		pathDev, pathErr := lookup(effPath)
-		homeDev, homeErr := fsDeviceWalkUpWithLookup(home, lookup)
+		homeDev, homeErr := fsDeviceWalkUpWithLookup(anchor, lookup)
 		if pathErr == nil && homeErr == nil && pathDev != homeDev {
 			topDir, terr := walkDeviceBoundary(effPath, lookup)
 			if terr != nil {
