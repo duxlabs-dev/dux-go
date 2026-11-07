@@ -1,22 +1,25 @@
 package weather
 
 import (
+	"math"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 )
 
+// readings are the values fill copies as they are. The feels-like temperature is left
+// out, fillFeelsLike handles it.
 func (c *Current) readings() []**float64 {
 	return []**float64{
-		&c.Temperature, &c.ApparentTemperature, &c.RelativeHumidity, &c.IsDay, &c.WeatherCode,
+		&c.Temperature, &c.RelativeHumidity, &c.IsDay, &c.WeatherCode,
 		&c.SurfacePressure, &c.WindSpeed, &c.WindDirection,
 	}
 }
 
 func (h *Hourly) readings() []*[]*float64 {
 	return []*[]*float64{
-		&h.Temperature, &h.ApparentTemperature, &h.RelativeHumidity, &h.DewPoint, &h.WeatherCode,
+		&h.Temperature, &h.RelativeHumidity, &h.DewPoint, &h.WeatherCode,
 		&h.PrecipitationProbability, &h.WindSpeed, &h.SurfacePressure, &h.Visibility, &h.UVIndex, &h.IsDay,
 	}
 }
@@ -39,6 +42,11 @@ func (d *Daily) times() []*[]string {
 // zone. Days stay matched by date.
 func (f *Forecast) fill(extra *Forecast) bool {
 	filled := false
+	if f.Current.ApparentTemperature == nil {
+		if apparent := feelsLike(f.Current.Temperature, extra.Current.Temperature, extra.Current.ApparentTemperature); apparent != nil {
+			f.Current.ApparentTemperature, filled = apparent, true
+		}
+	}
 	targets, sources := f.Current.readings(), extra.Current.readings()
 	for i, target := range targets {
 		if *target == nil && *sources[i] != nil {
@@ -51,6 +59,9 @@ func (f *Forecast) fill(extra *Forecast) bool {
 		key, extraKey = sameString, sameString
 	}
 	hours := matches(f.Hourly.Time, extra.Hourly.Time, key, extraKey)
+	if f.fillFeelsLike(extra, hours) {
+		filled = true
+	}
 	if fillSeries(f.Hourly.readings(), extra.Hourly.readings(), hours, len(f.Hourly.Time), isNil) {
 		filled = true
 	}
@@ -63,6 +74,70 @@ func (f *Forecast) fill(extra *Forecast) bool {
 	}
 	f.noteReported(extra)
 	return filled
+}
+
+// fillFeelsLike fills the hourly feels-like temperature the way fill does the current one.
+func (f *Forecast) fillFeelsLike(extra *Forecast, hours map[int]int) bool {
+	filled := false
+	target, source := f.Hourly, extra.Hourly
+	for i, j := range hours {
+		if j >= len(source.ApparentTemperature) || (i < len(target.ApparentTemperature) && target.ApparentTemperature[i] != nil) {
+			continue
+		}
+		if apparent := feelsLike(valueAt(target.Temperature, i), valueAt(source.Temperature, j), source.ApparentTemperature[j]); apparent != nil {
+			setAt(&target.ApparentTemperature, i, len(target.Time), apparent)
+			filled = true
+		}
+	}
+	return filled
+}
+
+// maxFeelsLikeGap is how far a filled feels-like may be from the temperature next to it.
+// Wind chill and heat stay below 30 °C even in extremes. A gap beyond that is a provider's
+// mistake, Kelvin or Fahrenheit above freezing among them, and is not taken.
+const maxFeelsLikeGap = 30
+
+// feelsLikeRange bounds a feels-like copied with no temperature on either side to compare
+// it with.
+const feelsLikeRange = 100
+
+// feelsLike is the value to fill in for a missing feels-like temperature, nil for none.
+//
+// With both temperatures it is temperature shifted by how much colder or warmer the other
+// provider's feels-like is than its own temperature: its absolute value comes from another
+// model and can sit on the wrong side of the temperature shown next to it. Without one of
+// them it is copied as it is; where temperature is missing, it is filled from the same
+// provider. A value further than maxFeelsLikeGap from the temperature it goes with, beyond
+// ±feelsLikeRange when there is none, or not finite, is dropped.
+func feelsLike(temperature, otherTemperature, otherApparent *float64) *float64 {
+	if otherApparent == nil {
+		return nil
+	}
+	value, reference := *otherApparent, temperature
+	if reference == nil {
+		reference = otherTemperature
+	} else if otherTemperature != nil {
+		value = math.Round((*temperature+*otherApparent-*otherTemperature)*10) / 10
+	}
+	gap, limit := math.Abs(value), float64(feelsLikeRange)
+	if reference != nil {
+		gap, limit = math.Abs(value-*reference), maxFeelsLikeGap
+	}
+	// !(gap <= limit) also drops NaN.
+	if math.IsInf(value, 0) || !(gap <= limit) {
+		return nil
+	}
+	// Rounding a small negative offset gives -0, which would reach the JSON as "-0".
+	value += 0
+	return &value
+}
+
+// valueAt is values[i], nil past the end.
+func valueAt(values []*float64, i int) *float64 {
+	if i < 0 || i >= len(values) {
+		return nil
+	}
+	return values[i]
 }
 
 // fillTimes fills sun and moon times, moved into f's zone when both zones are known. A
