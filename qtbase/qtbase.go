@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 
 	"github.com/ebitengine/purego"
@@ -72,13 +73,14 @@ func runNative(locateErr error, args []string) int {
 }
 
 // Locate resolves the runtime library: the host's embedded copy, then
-// Soname next to the executable, then ../lib/<executable name>/Soname.
+// Soname next to the executable, then ../lib/<executable name>/Soname,
+// then the system library directories in loader order (LD_LIBRARY_PATH, ld.so.conf, /lib and /usr/lib).
 func Locate(embedded Locator) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		exe = os.Args[0]
 	}
-	return locate(embedded, exe, fileExists)
+	return locate(embedded, exe, systemLibDirs(), fileExists)
 }
 
 // Runtime returns what the qs subcommand would run: the library, or upstream quickshell from PATH.
@@ -94,7 +96,7 @@ func Runtime(embedded Locator) (string, error) {
 	return qs, nil
 }
 
-func locate(embedded Locator, exe string, exists func(string) bool) (string, error) {
+func locate(embedded Locator, exe string, systemDirs []string, exists func(string) bool) (string, error) {
 	if embedded != nil {
 		path, err := embedded()
 		if err != nil {
@@ -105,15 +107,62 @@ func locate(embedded Locator, exe string, exists func(string) bool) (string, err
 		}
 	}
 	dir := filepath.Dir(exe)
-	for _, path := range []string{
+	candidates := []string{
 		filepath.Join(dir, Soname),
 		filepath.Join(dir, "..", "lib", filepath.Base(exe), Soname),
-	} {
+	}
+	for _, libDir := range systemDirs {
+		candidates = append(candidates, filepath.Join(libDir, Soname))
+	}
+	for _, path := range candidates {
 		if exists(path) {
 			return path, nil
 		}
 	}
-	return "", fmt.Errorf("%s is not embedded in this build and not found next to %s", Soname, exe)
+	return "", fmt.Errorf("%s is not embedded in this build, not next to %s, and not in the system library directories", Soname, exe)
+}
+
+func systemLibDirs() []string {
+	var dirs []string
+	for _, dir := range strings.Split(os.Getenv("LD_LIBRARY_PATH"), ":") {
+		if dir != "" {
+			dirs = append(dirs, dir)
+		}
+	}
+	dirs = append(dirs, ldSoConfDirs("/etc/ld.so.conf", 0)...)
+	return append(dirs, "/usr/lib64", "/usr/lib", "/lib64", "/lib", "/usr/local/lib64", "/usr/local/lib")
+}
+
+func ldSoConfDirs(conf string, depth int) []string {
+	if depth > 4 {
+		return nil
+	}
+	data, err := os.ReadFile(conf)
+	if err != nil {
+		return nil
+	}
+	var dirs []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if i := strings.IndexByte(line, '#'); i >= 0 {
+			line = line[:i]
+		}
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "":
+		case strings.HasPrefix(line, "include "):
+			pattern := strings.TrimSpace(strings.TrimPrefix(line, "include "))
+			if !filepath.IsAbs(pattern) {
+				pattern = filepath.Join(filepath.Dir(conf), pattern)
+			}
+			matches, _ := filepath.Glob(pattern)
+			for _, match := range matches {
+				dirs = append(dirs, ldSoConfDirs(match, depth+1)...)
+			}
+		default:
+			dirs = append(dirs, line)
+		}
+	}
+	return dirs
 }
 
 func fileExists(path string) bool {
