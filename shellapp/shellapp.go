@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/duxlabs-dev/dux-go/paths"
+	"github.com/duxlabs-dev/dux-go/qtbase"
 	"github.com/spf13/cobra"
 )
 
@@ -33,6 +34,7 @@ type Config struct {
 	QSAppID    string   // e.g. "dev.duxlabs.calendar"
 	Version    string
 	Embedded   Embedded
+	QtBase     qtbase.Locator // embedded libdux-qt-base, nil when the host carries none
 	Boot       func(ctx context.Context) (Backend, error)
 	PreLaunch  func()
 	ExtraEnv   func(configPath string) []string

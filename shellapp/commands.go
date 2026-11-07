@@ -44,6 +44,14 @@ func (a *App) runCommand() *cobra.Command {
 			if err := a.applyLogFlags(cmd); err != nil {
 				return err
 			}
+			if qsChild, _ := cmd.Flags().GetBool("qs-child"); qsChild {
+				if err := os.Setenv(a.qsChildEnv(), "1"); err != nil {
+					return err
+				}
+			}
+			if err := a.checkUIRuntime(); err != nil {
+				return err
+			}
 			if daemon {
 				return a.RunDaemon(session)
 			}
@@ -55,6 +63,7 @@ func (a *App) runCommand() *cobra.Command {
 	cmd.Flags().Bool("daemon-child", false, "Internal flag for daemon child process")
 	cmd.Flags().Bool("session", false, "Session managed (e.g. systemd unit)")
 	cmd.Flags().Bool("hidden", false, "Start with the window hidden (tray only)")
+	cmd.Flags().Bool("qs-child", false, "Run the UI on upstream quickshell (qs on PATH) instead of dux-qt-base (sets "+a.cfg.EnvPrefix+"_QS_CHILD)")
 	cmd.Flags().String("log-level", "", "Log level: debug, info, warn, error, fatal (overrides "+a.cfg.EnvPrefix+"_LOG_LEVEL)")
 	cmd.Flags().String("log-file", "", "Append logs to this file in addition to stderr (overrides "+a.cfg.EnvPrefix+"_LOG_FILE)")
 	_ = cmd.Flags().MarkHidden("daemon-child")

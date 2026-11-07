@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 
 	"github.com/ebitengine/purego"
 )
@@ -52,24 +51,11 @@ func MaybeRunAndExit(embedded Locator) {
 		return
 	}
 	lib, err := Locate(embedded)
-	if err == nil {
-		os.Exit(run(lib, args))
-	}
-	os.Exit(runNative(err, args))
-}
-
-// Upstream quickshell runs the same QML; fork-only pragmas and properties degrade to warnings there.
-func runNative(locateErr error, args []string) int {
-	qs, err := exec.LookPath(NativeBinary)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v, and no %s on PATH\n", locateErr, NativeBinary)
-		return 127
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(127)
 	}
-	argv := append([]string{NativeBinary}, args[1:]...)
-	if err := syscall.Exec(qs, argv, os.Environ()); err != nil {
-		fmt.Fprintf(os.Stderr, "exec %s: %v\n", qs, err)
-	}
-	return 127
+	os.Exit(run(lib, args))
 }
 
 // Locate resolves the runtime library: the host's embedded copy, then
@@ -81,19 +67,6 @@ func Locate(embedded Locator) (string, error) {
 		exe = os.Args[0]
 	}
 	return locate(embedded, exe, systemLibDirs(), fileExists)
-}
-
-// Runtime returns what the qs subcommand would run: the library, or upstream quickshell from PATH.
-func Runtime(embedded Locator) (string, error) {
-	lib, err := Locate(embedded)
-	if err == nil {
-		return lib, nil
-	}
-	qs, lookErr := exec.LookPath(NativeBinary)
-	if lookErr != nil {
-		return "", fmt.Errorf("%w, and no %s on PATH", err, NativeBinary)
-	}
-	return qs, nil
 }
 
 func locate(embedded Locator, exe string, systemDirs []string, exists func(string) bool) (string, error) {
@@ -119,7 +92,7 @@ func locate(embedded Locator, exe string, systemDirs []string, exists func(strin
 			return path, nil
 		}
 	}
-	return "", fmt.Errorf("%s is not embedded in this build, not next to %s, and not in the system library directories", Soname, exe)
+	return "", fmt.Errorf("%s is not embedded in this build, not next to %s, and not in the system library directories: install dux-qt-base", Soname, exe)
 }
 
 func systemLibDirs() []string {

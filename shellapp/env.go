@@ -2,6 +2,7 @@ package shellapp
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -45,8 +46,33 @@ func appendQtEnv(env []string) []string {
 	return env
 }
 
+func (a *App) qsChildEnv() string { return a.cfg.EnvPrefix + "_QS_CHILD" }
+
+func (a *App) qsChild() bool { return os.Getenv(a.qsChildEnv()) != "" }
+
+func (a *App) checkUIRuntime() error {
+	if a.qsChild() {
+		if _, err := exec.LookPath(qtbase.NativeBinary); err != nil {
+			return fmt.Errorf("%s is set but %s is not on PATH", a.qsChildEnv(), qtbase.NativeBinary)
+		}
+		return nil
+	}
+	if _, err := qtbase.Locate(a.cfg.QtBase); err != nil {
+		return fmt.Errorf("%w\nto run the UI on upstream quickshell instead, use `%s run --qs-child`", err, binaryName())
+	}
+	return nil
+}
+
+// Upstream quickshell runs the same QML; fork-only pragmas and properties degrade to warnings there.
+func (a *App) uiCommand(ctx context.Context) *exec.Cmd {
+	if a.qsChild() {
+		return exec.CommandContext(ctx, qtbase.NativeBinary, "-p", a.configPath)
+	}
+	return qtbase.Command(ctx, "-p", a.configPath)
+}
+
 func (a *App) buildUICommand(ctx context.Context, socketPath string) *exec.Cmd {
-	cmd := qtbase.Command(ctx, "-p", a.configPath)
+	cmd := a.uiCommand(ctx)
 	cmd.WaitDelay = uiWaitDelay
 	env := append(os.Environ(),
 		a.cfg.EnvPrefix+"_SOCKET="+socketPath,
