@@ -58,6 +58,10 @@ no weather forecast: openmeteo: HTTP 503; metno: context deadline exceeded
 
 Network errors leave out the request URL, which holds the location. `errors.Is` and `errors.As` see through both, so `errors.Is(err, weather.ErrTooLarge)` works. A provider id that is neither built in nor resolved fails as `unknown weather provider`, the others still run.
 
+## Air quality
+
+`Request.AirQuality` also asks [Open-Meteo's air quality API](https://open-meteo.com/en/docs/air-quality-api) for `current.european_aqi`, `current.us_aqi`, `current.pm2_5` and `current.pm10`, at the same time as the providers. `current.pm2_5_mean_24h` is the mean of its hourly PM2.5 over the past 24 hours, which the WHO guideline values are for, and null with fewer than 18 of those hours. It fills in after all of them, so a provider's own air quality, from a plugin say, wins, and it shows up in `Result.Filled` as `openmeteo_air_quality`. It is never the source: with every provider failed, the lookup fails all the same, and its own failure or a late answer only leaves the air quality null. Without `AirQuality` it is not asked.
+
 ## Adding things
 
 A new built-in provider: add the `Provider` const, write a `fetchX` method on `Client` that returns a `*Forecast`, add a row to `builtins` in `providers.go`.
@@ -129,7 +133,12 @@ echo '{"latitude":46.95,"longitude":7.45}' | ./fetch
       "weather_code": 3,
       "surface_pressure": 961.4,
       "wind_speed_10m": 10.4,
-      "wind_direction_10m": 40
+      "wind_direction_10m": 40,
+      "european_aqi": 32,
+      "us_aqi": 61,
+      "pm2_5": 10.8,
+      "pm10": 13.2,
+      "pm2_5_mean_24h": 12.6
     },
     "hourly": {
       "time": ["2026-11-02T14:00"],
@@ -160,4 +169,4 @@ echo '{"latitude":46.95,"longitude":7.45}' | ./fetch
 }
 ```
 
-Times are local wall-clock times without a zone. Temperatures are °C, wind speed km/h, wind direction degrees, pressure hPa, visibility metres, humidity and probabilities percent, `is_day` 1 or 0. A missing reading is null. `current` readings are always present, hourly and daily arrays are left out when the provider has none of them. `filled`, `timezone` and `utc_offset_seconds` are left out when unknown.
+Times are local wall-clock times without a zone. Temperatures are °C, wind speed km/h, wind direction degrees, pressure hPa, visibility metres, humidity and probabilities percent, `pm2_5` and `pm10` µg/m³, `is_day` 1 or 0. `european_aqi` is the European index, 0 to 100 and above, `us_aqi` the US one, 0 to 500. A missing reading is null. `current` readings are always present, hourly and daily arrays are left out when the provider has none of them. `filled`, `timezone` and `utc_offset_seconds` are left out when unknown.

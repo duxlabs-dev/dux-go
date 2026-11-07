@@ -12,6 +12,9 @@ type Provider string
 const (
 	OpenMeteo Provider = "openmeteo"
 	METNorway Provider = "metno"
+	// OpenMeteoAirQuality only fills air quality, asked for with Request.AirQuality. It is
+	// never a Result's Source and not a provider to list in Request.Providers.
+	OpenMeteoAirQuality Provider = "openmeteo_air_quality"
 )
 
 // DefaultProviders is used when Request.Providers is nil.
@@ -30,6 +33,9 @@ type Request struct {
 	Longitude float64
 	// Providers in priority order. nil = DefaultProviders, empty non-nil = ErrNoProviders.
 	Providers []Provider
+	// AirQuality also asks Open-Meteo's air quality API, for the Current air quality
+	// readings the providers lack.
+	AirQuality bool
 }
 
 func (r Request) validLocation() bool {
@@ -74,6 +80,13 @@ type Current struct {
 	SurfacePressure     *float64 `json:"surface_pressure"`
 	WindSpeed           *float64 `json:"wind_speed_10m"`
 	WindDirection       *float64 `json:"wind_direction_10m"`
+	// Air quality: the European (EAQI) and US index, particulate matter in µg/m³.
+	EuropeanAQI *float64 `json:"european_aqi"`
+	USAQI       *float64 `json:"us_aqi"`
+	PM25        *float64 `json:"pm2_5"`
+	PM10        *float64 `json:"pm10"`
+	// PM25Mean24h is the mean PM2.5 of the past 24 hours, what the WHO guideline is for.
+	PM25Mean24h *float64 `json:"pm2_5_mean_24h"`
 }
 
 // Hourly readings are indexed like Time. A reading the provider lacks entirely is omitted.
