@@ -9,14 +9,17 @@ package qtbase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
+	"strconv"
 
+	"github.com/duxlabs-dev/dux-go/log"
 	"github.com/ebitengine/purego"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -58,18 +61,15 @@ func MaybeRunAndExit(embedded Locator) {
 	os.Exit(run(lib, args))
 }
 
-// Locate resolves the runtime library: the host's embedded copy, then
-// Soname next to the executable, then ../lib/<executable name>/Soname,
-// then the system library directories in loader order (LD_LIBRARY_PATH, ld.so.conf, /lib and /usr/lib).
 func Locate(embedded Locator) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		exe = os.Args[0]
 	}
-	return locate(embedded, exe, systemLibDirs(), fileExists)
+	return locate(embedded, exe, fileExists)
 }
 
-func locate(embedded Locator, exe string, systemDirs []string, exists func(string) bool) (string, error) {
+func locate(embedded Locator, exe string, exists func(string) bool) (string, error) {
 	if embedded != nil {
 		path, err := embedded()
 		if err != nil {
@@ -84,58 +84,12 @@ func locate(embedded Locator, exe string, systemDirs []string, exists func(strin
 		filepath.Join(dir, Soname),
 		filepath.Join(dir, "..", "lib", filepath.Base(exe), Soname),
 	}
-	for _, libDir := range systemDirs {
-		candidates = append(candidates, filepath.Join(libDir, Soname))
-	}
 	for _, path := range candidates {
 		if exists(path) {
 			return path, nil
 		}
 	}
-	return "", fmt.Errorf("%s is not embedded in this build, not next to %s, and not in the system library directories: install dux-qt-base", Soname, exe)
-}
-
-func systemLibDirs() []string {
-	var dirs []string
-	for _, dir := range strings.Split(os.Getenv("LD_LIBRARY_PATH"), ":") {
-		if dir != "" {
-			dirs = append(dirs, dir)
-		}
-	}
-	dirs = append(dirs, ldSoConfDirs("/etc/ld.so.conf", 0)...)
-	return append(dirs, "/usr/lib64", "/usr/lib", "/lib64", "/lib", "/usr/local/lib64", "/usr/local/lib")
-}
-
-func ldSoConfDirs(conf string, depth int) []string {
-	if depth > 4 {
-		return nil
-	}
-	data, err := os.ReadFile(conf)
-	if err != nil {
-		return nil
-	}
-	var dirs []string
-	for _, line := range strings.Split(string(data), "\n") {
-		if i := strings.IndexByte(line, '#'); i >= 0 {
-			line = line[:i]
-		}
-		line = strings.TrimSpace(line)
-		switch {
-		case line == "":
-		case strings.HasPrefix(line, "include "):
-			pattern := strings.TrimSpace(strings.TrimPrefix(line, "include "))
-			if !filepath.IsAbs(pattern) {
-				pattern = filepath.Join(filepath.Dir(conf), pattern)
-			}
-			matches, _ := filepath.Glob(pattern)
-			for _, match := range matches {
-				dirs = append(dirs, ldSoConfDirs(match, depth+1)...)
-			}
-		default:
-			dirs = append(dirs, line)
-		}
-	}
-	return dirs
+	return Soname, nil
 }
 
 func fileExists(path string) bool {
@@ -165,8 +119,25 @@ func run(lib string, args []string) int {
 		fmt.Fprintf(os.Stderr, "load %s: %v\n", lib, err)
 		return 127
 	}
+	entry, err := purego.Dlsym(handle, "dqb_main")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load %s: %v\n", lib, err)
+		return 127
+	}
+	path, err := loadedLibraryPath(entry)
+	if err != nil {
+		log.Warn("Could not resolve loaded runtime path", "library", lib, "err", err)
+		path = lib
+	}
+	version := libraryString(handle, "dqb_version")
+	revision := libraryString(handle, "dqb_git_revision")
+	if err := publishRuntime(path, version, revision); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 127
+	}
+	log.Info("Loaded runtime library", "path", path, "version", version, "revision", revision)
 	var dqbMain func(argc int32, argv **byte) int32
-	purego.RegisterLibFunc(&dqbMain, handle, "dqb_main")
+	purego.RegisterFunc(&dqbMain, entry)
 
 	// QCoreApplication keeps the argv pointers for the whole run.
 	argv := make([]*byte, len(args)+1)
@@ -177,4 +148,51 @@ func run(lib string, args []string) int {
 	code := dqbMain(int32(len(args)), &argv[0])
 	runtime.KeepAlive(argv)
 	return int(code)
+}
+
+type dlInfo struct {
+	filename *byte
+	_        [3]uintptr
+}
+
+func loadedLibraryPath(entry uintptr) (string, error) {
+	symbol, err := purego.Dlsym(purego.RTLD_DEFAULT, "dladdr")
+	if err != nil {
+		return "", err
+	}
+	var dladdr func(uintptr, *dlInfo) int32
+	purego.RegisterFunc(&dladdr, symbol)
+	var info dlInfo
+	if dladdr(entry, &info) == 0 || info.filename == nil {
+		return "", errors.New("dladdr found no object containing dqb_main")
+	}
+	library, err := filepath.EvalSymlinks(unix.BytePtrToString(info.filename))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(library)
+}
+
+func libraryString(handle uintptr, name string) string {
+	symbol, err := purego.Dlsym(handle, name)
+	if err != nil {
+		return ""
+	}
+	var read func() string
+	purego.RegisterFunc(&read, symbol)
+	return read()
+}
+
+func publishRuntime(library, version, revision string) error {
+	for key, value := range map[string]string{
+		"QTBASE_RUNTIME_LIBRARY":  library,
+		"QTBASE_RUNTIME_VERSION":  version,
+		"QTBASE_RUNTIME_REVISION": revision,
+		"QTBASE_RUNTIME_PID":      strconv.Itoa(os.Getpid()),
+	} {
+		if err := os.Setenv(key, value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
