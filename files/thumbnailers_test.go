@@ -214,9 +214,20 @@ func TestAudioThumbnailerLookup(t *testing.T) {
 	if resolveExecutable("ffmpegthumbnailer") == "" {
 		t.Skip("ffmpegthumbnailer not installed")
 	}
+	homeDir, _ := isolatedThumbnailerDirs(t)
 	set := loadThumbnailers()
 	tool, ok := set.lookup("audio/mpeg")
 	require.True(t, ok)
 	assert.Contains(t, tool.argv, "-m")
 	assert.Contains(t, set.mediaKinds(), "audio")
+
+	// Custom user audio thumbnailer takes precedence over builtin audio/*
+	bin := t.TempDir()
+	writeScript(t, filepath.Join(bin, "custom-audio-tool"), "exit 0")
+	writeThumbnailerEntry(t, homeDir, "custom-audio", "[Thumbnailer Entry]\nExec="+filepath.Join(bin, "custom-audio-tool")+" %i %o\nMimeType=audio/mpeg;\n")
+
+	customSet := loadThumbnailers()
+	customTool, ok := customSet.lookup("audio/mpeg")
+	require.True(t, ok)
+	assert.Equal(t, filepath.Join(bin, "custom-audio-tool"), customTool.argv[0])
 }

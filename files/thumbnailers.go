@@ -34,8 +34,8 @@ type thumbnailers struct {
 
 func loadThumbnailers() *thumbnailers {
 	set := &thumbnailers{byMime: map[string]thumbnailer{}}
-	set.addBuiltins()
 	set.loadDirs()
+	set.addBuiltins()
 	return set
 }
 
@@ -110,11 +110,6 @@ func (t *thumbnailers) addBuiltins() {
 }
 
 func (t *thumbnailers) lookup(mime string) (thumbnailer, bool) {
-	if mediaType(mime) == "audio" {
-		if tool, ok := t.byMime["audio/*"]; ok {
-			return tool, true
-		}
-	}
 	if tool, ok := t.byMime[mime]; ok {
 		return tool, true
 	}
