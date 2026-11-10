@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"testing"
 
 	"github.com/duxlabs-dev/dux-go/log"
 	"github.com/ebitengine/purego"
@@ -28,6 +29,8 @@ const (
 	Soname       = "libdux-qt-base.so.0"
 	NativeBinary = "qs"
 )
+
+var ErrTestReexec = errors.New("a test binary cannot re-exec itself")
 
 // Locator returns the path of a runtime library the host carries itself
 // (an embedded copy it extracted), or "" when this build has none.
@@ -45,7 +48,11 @@ func Command(ctx context.Context, args ...string) *exec.Cmd {
 	if err != nil {
 		exe = os.Args[0]
 	}
-	return exec.CommandContext(ctx, exe, append([]string{Subcommand}, args...)...)
+	cmd := exec.CommandContext(ctx, exe, append([]string{Subcommand}, args...)...)
+	if testing.Testing() {
+		cmd.Err = ErrTestReexec
+	}
+	return cmd
 }
 
 func MaybeRunAndExit(embedded Locator) {

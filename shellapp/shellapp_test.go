@@ -15,9 +15,15 @@ import (
 	"time"
 
 	"github.com/duxlabs-dev/dux-go/ipc"
+	"github.com/duxlabs-dev/dux-go/qtbase"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTestBinaryNeverReexecsItself(t *testing.T) {
+	assert.ErrorIs(t, testApp(t).RunDaemon(false), qtbase.ErrTestReexec)
+	assert.ErrorIs(t, qtbase.Command(context.Background(), "-p", t.TempDir()).Start(), qtbase.ErrTestReexec)
+}
 
 func testApp(t *testing.T) *App {
 	t.Helper()

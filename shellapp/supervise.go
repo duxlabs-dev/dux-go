@@ -12,9 +12,11 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"testing"
 	"time"
 
 	"github.com/duxlabs-dev/dux-go/log"
+	"github.com/duxlabs-dev/dux-go/qtbase"
 )
 
 const stderrTailLimit = 8192
@@ -153,6 +155,9 @@ func (a *App) RunDaemon(session bool) error {
 }
 
 func (a *App) spawnDaemonChild() error {
+	if testing.Testing() {
+		return qtbase.ErrTestReexec
+	}
 	args := []string{"run", "-d", "--daemon-child"}
 	if a.startHidden {
 		args = append(args, "--hidden")
@@ -264,6 +269,9 @@ func (a *App) superviseShell(cmd *exec.Cmd, silent bool, backend Backend, tail *
 }
 
 func execDetachedRestart(targetPID int) {
+	if testing.Testing() {
+		return
+	}
 	selfPath, err := os.Executable()
 	if err != nil {
 		return
