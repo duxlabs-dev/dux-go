@@ -209,3 +209,14 @@ func joinArgs(args []string) string {
 	}
 	return out
 }
+
+func TestAudioThumbnailerLookup(t *testing.T) {
+	if resolveExecutable("ffmpegthumbnailer") == "" {
+		t.Skip("ffmpegthumbnailer not installed")
+	}
+	set := loadThumbnailers()
+	tool, ok := set.lookup("audio/mpeg")
+	require.True(t, ok)
+	assert.Contains(t, tool.argv, "-m")
+	assert.Contains(t, set.mediaKinds(), "audio")
+}
