@@ -1,8 +1,10 @@
 package weather
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -200,7 +202,8 @@ func TestFillSkipsPolarSunTimesFromAnotherZone(t *testing.T) {
 }
 
 // Every value of current, hourly and daily but the times is filled where it is missing.
-// The fields are found by reflection, so a new field has to be fillable too.
+// The fields are found by reflection, so a new field has to be fillable too. 21 stays
+// within maxFeelsLikeGap of the fixture's temperatures.
 func TestFillEveryField(t *testing.T) {
 	parts := map[string]func(*Forecast) reflect.Value{
 		"current": func(f *Forecast) reflect.Value { return reflect.ValueOf(f.Current).Elem() },
@@ -221,11 +224,11 @@ func TestFillEveryField(t *testing.T) {
 				want := ""
 				switch field.Type {
 				case reflect.TypeFor[*float64]():
-					source.Set(reflect.ValueOf(reading(42)))
-					want = "42"
+					source.Set(reflect.ValueOf(reading(21)))
+					want = "21"
 				case reflect.TypeFor[[]*float64]():
-					source.Set(reflect.ValueOf(readings(part(extra).FieldByName("Time").Len(), constant(42))))
-					want = "42"
+					source.Set(reflect.ValueOf(readings(part(extra).FieldByName("Time").Len(), constant(21))))
+					want = "21"
 				case reflect.TypeFor[[]string]():
 					times := make([]string, len(extra.Daily.Time))
 					for j, date := range extra.Daily.Time {
@@ -314,5 +317,134 @@ func TestFillHalfCoveredDayIsComputed(t *testing.T) {
 	}
 	if got := at(primary.Daily.Moonset, 0); !near(t, got, "2026-11-04T02:39") {
 		t.Errorf("moonset %q, Open-Meteo says 2026-11-04T02:39", got)
+	}
+}
+
+// The source's temperature with the other provider's feels-like offset, not its absolute
+// feels-like: MET Norway at 9.9 °C feels 9.9 °C, so next to MeteoSwiss' 9.7 °C it is 9.7 °C.
+func TestFillFeelsLikeKeepsTheOtherProvidersOffset(t *testing.T) {
+	primary := openMeteoFixture()
+	primary.Current.Temperature, primary.Current.ApparentTemperature = reading(9.7), nil
+	primary.Hourly.Temperature[14], primary.Hourly.Temperature[15] = reading(9.7), reading(-3.3)
+	extra := openMeteoFixture()
+	extra.Current.Temperature, extra.Current.ApparentTemperature = reading(9.9), reading(9.9)
+	extra.Hourly.Temperature = readings(48, constant(12))
+	extra.Hourly.ApparentTemperature = readings(48, constant(8.1))
+
+	if !primary.fill(extra) {
+		t.Fatal("fill reported nothing filled")
+	}
+	got := fmt.Sprint(value(primary.Current.ApparentTemperature), value(primary.Hourly.ApparentTemperature[14]),
+		value(primary.Hourly.ApparentTemperature[15]), value(primary.Hourly.ApparentTemperature[0]))
+	if got != "9.7 5.8 -7.2 2.1" {
+		t.Errorf("feels like = %s", got)
+	}
+}
+
+// Hours are matched by instant first, the offset is the one of the same hour.
+func TestFillFeelsLikeOffsetOfTheSameInstant(t *testing.T) {
+	primary := openMeteoFixture()
+	primary.Hourly.Temperature = readings(48, constant(10))
+	extra := openMeteoFixture()
+	extra.Timezone, extra.UTCOffsetSeconds = "UTC", nil
+	extra.Hourly.Time = hoursFrom("2026-11-02T00:00", 48)
+	extra.Hourly.Temperature = readings(48, constant(20))
+	extra.Hourly.ApparentTemperature = readings(48, func(i int) *float64 { return reading(20 - float64(i)) })
+
+	primary.fill(extra)
+	// 14:00 in Bern is 13:00 UTC, where the offset is -13: 10 - 13.
+	if got := fmt.Sprint(value(primary.Hourly.ApparentTemperature[14])); got != "-3" {
+		t.Errorf("feels like at 14:00 = %s, want -3", got)
+	}
+}
+
+// Where the source has no temperature both are taken from the other provider, which
+// matches. Without the other provider's temperature there is no offset, the value is
+// copied. The source's own feels-like stays.
+func TestFillFeelsLikeWithoutATemperature(t *testing.T) {
+	primary := openMeteoFixture()
+	primary.Current.Temperature, primary.Current.ApparentTemperature = nil, nil
+	primary.Hourly.Temperature[3] = nil
+	primary.Hourly.ApparentTemperature = readings(48, func(int) *float64 { return nil })
+	primary.Hourly.ApparentTemperature[7] = reading(1.5)
+	extra := openMeteoFixture()
+	extra.Current.Temperature, extra.Current.ApparentTemperature = reading(4), reading(1)
+	extra.Hourly.Temperature = readings(48, constant(4))
+	extra.Hourly.Temperature[5] = nil
+	extra.Hourly.ApparentTemperature = readings(48, constant(1))
+
+	primary.fill(extra)
+	got := fmt.Sprint(value(primary.Current.Temperature), value(primary.Current.ApparentTemperature),
+		value(primary.Hourly.Temperature[3]), value(primary.Hourly.ApparentTemperature[3]),
+		value(primary.Hourly.ApparentTemperature[5]), value(primary.Hourly.ApparentTemperature[6]),
+		value(primary.Hourly.ApparentTemperature[7]))
+	if got != "4 1 4 1 1 3 1.5" {
+		t.Errorf("filled = %s", got)
+	}
+}
+
+// Plugins can send anything. A constant unit offset on both temperatures, Kelvin here,
+// still gives the right difference. A feels-like that cannot belong to the temperature
+// next to it, mixed units or a broken value, is not filled at all rather than copied.
+func TestFillFeelsLikeFromOddProviders(t *testing.T) {
+	cases := []struct {
+		name                 string
+		temperature          *float64
+		other, otherApparent *float64
+		want                 string
+	}{
+		{"kelvin on both", reading(9.7), reading(283.05), reading(281.05), "7.7"},
+		{"feels-like in celsius, temperature in kelvin", reading(9.7), reading(283.05), reading(8), "<nil>"},
+		{"far off without the other temperature", reading(9.7), nil, reading(80), "<nil>"},
+		{"far off where the source has no temperature", nil, reading(10), reading(-45), "<nil>"},
+		{"overflow", reading(1e308), reading(-1e308), reading(1e308), "<nil>"},
+		{"fahrenheit feels-like next to celsius", reading(10), nil, reading(50), "<nil>"},
+		{"strong wind chill", reading(-30), reading(-30), reading(-55), "-55"},
+		{"no temperatures at all", nil, nil, reading(3), "3"},
+		{"no temperatures, broken value", nil, nil, reading(1e6), "<nil>"},
+		{"offset rounds to zero", reading(0), reading(10.02), reading(10), "0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			primary := openMeteoFixture()
+			primary.Current.Temperature, primary.Current.ApparentTemperature = tc.temperature, nil
+			primary.Hourly.Temperature = readings(48, func(int) *float64 { return tc.temperature })
+			extra := openMeteoFixture()
+			extra.Current.Temperature, extra.Current.ApparentTemperature = tc.other, tc.otherApparent
+			extra.Hourly.Temperature = readings(48, func(int) *float64 { return tc.other })
+			extra.Hourly.ApparentTemperature = readings(48, func(int) *float64 { return tc.otherApparent })
+
+			primary.fill(extra)
+			got := fmt.Sprint(value(primary.Current.ApparentTemperature))
+			hourly := fmt.Sprint(value(valueAt(primary.Hourly.ApparentTemperature, 20)))
+			if got != tc.want || hourly != tc.want {
+				t.Errorf("feels like = %s, hourly %s, want %s", got, hourly, tc.want)
+			}
+			encoded, err := json.Marshal(primary.Current)
+			if err != nil {
+				t.Fatalf("forecast does not encode: %v", err)
+			}
+			if strings.Contains(string(encoded), ":-0,") {
+				t.Errorf("negative zero in %s", encoded)
+			}
+		})
+	}
+}
+
+// A plugin's hourly arrays can be shorter than its times, or than the other provider's.
+func TestFillFeelsLikeShortArrays(t *testing.T) {
+	primary := openMeteoFixture()
+	primary.Hourly.Temperature = readings(10, constant(10))
+	extra := openMeteoFixture()
+	extra.Hourly.Temperature = readings(5, constant(12))
+	extra.Hourly.ApparentTemperature = readings(20, constant(9))
+
+	primary.fill(extra)
+	got := fmt.Sprint(len(primary.Hourly.ApparentTemperature), value(primary.Hourly.ApparentTemperature[2]),
+		value(primary.Hourly.ApparentTemperature[7]), value(primary.Hourly.ApparentTemperature[15]))
+	// Hour 2 has both temperatures and is shifted. Hour 7 has only the source's and hour 15
+	// neither, there the value is copied.
+	if got != "48 7 9 9" {
+		t.Errorf("filled = %s", got)
 	}
 }
