@@ -27,27 +27,29 @@ type Options struct {
 
 // Client is safe for concurrent use.
 type Client struct {
-	userAgent    string
-	http         *http.Client
-	sources      map[Provider]Source
-	resolve      func(Provider) (Source, bool)
-	now          func() time.Time
-	zone         *time.Location
-	fillGrace    time.Duration
-	openMeteoURL string
-	metnoURL     string
+	userAgent     string
+	http          *http.Client
+	sources       map[Provider]Source
+	resolve       func(Provider) (Source, bool)
+	now           func() time.Time
+	zone          *time.Location
+	fillGrace     time.Duration
+	openMeteoURL  string
+	metnoURL      string
+	airQualityURL string
 }
 
 func New(opts Options) *Client {
 	client := &Client{
-		userAgent:    opts.UserAgent,
-		http:         opts.HTTPClient,
-		resolve:      opts.Resolve,
-		now:          opts.Now,
-		zone:         opts.Location,
-		fillGrace:    fillGrace,
-		openMeteoURL: openMeteoURL,
-		metnoURL:     metnoURL,
+		userAgent:     opts.UserAgent,
+		http:          opts.HTTPClient,
+		resolve:       opts.Resolve,
+		now:           opts.Now,
+		zone:          opts.Location,
+		fillGrace:     fillGrace,
+		openMeteoURL:  openMeteoURL,
+		metnoURL:      metnoURL,
+		airQualityURL: airQualityURL,
 	}
 	client.sources = client.builtins()
 	if client.userAgent == "" {
@@ -68,6 +70,8 @@ func New(opts Options) *Client {
 type namedSource struct {
 	id Provider
 	Source
+	// fillOnly never becomes the Result's Source, it only fills in.
+	fillOnly bool
 }
 
 type providerResponse struct {
@@ -93,12 +97,20 @@ func (c *Client) Lookup(ctx context.Context, req Request) (*Result, error) {
 	ordered := make([]namedSource, 0, len(providers))
 	seen := make(map[Provider]bool, len(providers))
 	for _, provider := range providers {
-		if seen[provider] {
+		// Air quality is asked with Request.AirQuality, it cannot be a provider.
+		if seen[provider] || provider == OpenMeteoAirQuality {
 			continue
 		}
 		seen[provider] = true
 		source, _ := c.source(provider)
 		ordered = append(ordered, namedSource{id: provider, Source: source})
+	}
+	if len(ordered) == 0 {
+		return nil, ErrNoProviders
+	}
+	// Last, so a provider's own air quality wins.
+	if req.AirQuality {
+		ordered = append(ordered, namedSource{id: OpenMeteoAirQuality, Source: Source{Fetch: c.fetchAirQuality}, fillOnly: true})
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, providerTimeout)
@@ -109,6 +121,8 @@ func (c *Client) Lookup(ctx context.Context, req Request) (*Result, error) {
 	var result *Result
 	for i, response := range responses {
 		switch {
+		case ordered[i].fillOnly && (response.err != nil || result == nil):
+			// Nothing to fill, and its failure is not the providers'.
 		case response.err != nil:
 			failures = append(failures, &ProviderError{Provider: ordered[i].id, Err: response.err})
 		case result == nil:
@@ -140,8 +154,12 @@ func (c *Client) race(ctx context.Context, providers []namedSource, req Request)
 		remaining++
 		go func() {
 			forecast, err := provider.Fetch(ctx, req)
-			if err == nil {
+			switch {
+			case err != nil:
+			case !provider.fillOnly:
 				err = forecast.check()
+			case forecast == nil || forecast.Current == nil || forecast.Hourly == nil || forecast.Daily == nil:
+				err = errors.New("nothing to fill in")
 			}
 			replies <- providerResponse{index: index, forecast: forecast, err: err}
 		}()
@@ -149,7 +167,12 @@ func (c *Client) race(ctx context.Context, providers []namedSource, req Request)
 
 	var grace <-chan time.Time
 	for remaining > 0 {
-		if grace == nil && primaryKnown(responses, finished) {
+		decided, found := primaryState(providers, responses, finished)
+		if decided && !found {
+			// Every provider failed, a fill-only answer has nothing to fill.
+			return unfinished(responses, finished, errors.New("no forecast to fill in"))
+		}
+		if grace == nil && found {
 			timer := time.NewTimer(c.fillGrace)
 			defer timer.Stop()
 			grace = timer.C
@@ -167,16 +190,22 @@ func (c *Client) race(ctx context.Context, providers []namedSource, req Request)
 	return responses
 }
 
-func primaryKnown(responses []providerResponse, finished []bool) bool {
+// primaryState is whether the primary is decided, and whether there is one: the first
+// provider in order that is not fill-only and has answered with a forecast, every one
+// before it having failed.
+func primaryState(providers []namedSource, responses []providerResponse, finished []bool) (decided, found bool) {
 	for i, response := range responses {
+		if providers[i].fillOnly {
+			continue
+		}
 		if !finished[i] {
-			return false
+			return false, false
 		}
 		if response.err == nil {
-			return true
+			return true, true
 		}
 	}
-	return false
+	return true, false
 }
 
 func unfinished(responses []providerResponse, finished []bool, err error) []providerResponse {

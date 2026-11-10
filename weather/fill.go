@@ -14,6 +14,7 @@ func (c *Current) readings() []**float64 {
 	return []**float64{
 		&c.Temperature, &c.RelativeHumidity, &c.IsDay, &c.WeatherCode,
 		&c.SurfacePressure, &c.WindSpeed, &c.WindDirection,
+		&c.EuropeanAQI, &c.USAQI, &c.PM25, &c.PM10, &c.PM25Mean24h,
 	}
 }
 
