@@ -102,6 +102,7 @@ func (t *thumbnailers) add(mime string, tool thumbnailer) {
 func (t *thumbnailers) addBuiltins() {
 	if video := resolveExecutable("ffmpegthumbnailer"); video != "" {
 		t.add("video/*", thumbnailer{argv: []string{video, "-i", "%i", "-o", "%o", "-s", "%s"}})
+		t.add("audio/*", thumbnailer{argv: []string{video, "-i", "%i", "-o", "%o", "-s", "%s", "-m"}})
 	}
 	if pdf := resolveExecutable("pdftoppm"); pdf != "" {
 		t.add("application/pdf", thumbnailer{argv: []string{pdf, "-png", "-f", "1", "-l", "1", "-singlefile", "-scale-to", "%s", "%i", "%o"}, outputPrefix: true})
@@ -122,6 +123,8 @@ func (t *thumbnailers) mediaKinds() []string {
 		switch {
 		case mediaType(mime) == "video":
 			kinds["video"] = true
+		case mediaType(mime) == "audio":
+			kinds["audio"] = true
 		case mime == "application/pdf":
 			kinds["pdf"] = true
 		case mediaType(mime) == "application" || mediaType(mime) == "text":
