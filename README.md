@@ -9,11 +9,14 @@ Every app in the suite was carrying its own copy of the same logger, unix-socket
 | Package | What it is |
 |---|---|
 | `log` | charmbracelet logger singleton. `log.SetEnvPrefix("DANKCAL")` → reads `DANKCAL_LOG_LEVEL` / `DANKCAL_LOG_FILE`. File sink strips ANSI. |
-| `paths` | XDG dirs + per-process socket paths, keyed by app name. `paths.New("dankcal").SocketPath()` |
+| `paths` | XDG dirs (incl. `XDGDataDirs`/`XDGConfigDirs`) + per-process socket paths, keyed by app name. `paths.New("dankcal").SocketPath()` |
 | `errdefs` | `CustomError`/`ErrorType` with HTTP status mapping. Apps register their own types from `AppErrorBase` up. stdlib-only. |
 | `errdefs/humaerr` | huma error envelope + `HumaErrorFunc`. Split out so non-HTTP apps never pull huma. |
 | `ipc` | JSON-over-unix-socket RPC: server (ping/subscribe/unsubscribe built in), client, event bus, mux. Stale sockets get reaped by PID. Apps with their own subscribe protocol set `SubscribeHandler`; per-connection handshake capabilities via `CapabilitiesFunc`. |
 | `ipc/params` | Typed extraction from `map[string]any` request params. |
+| `ipc/spec` | Method/param specs for `describe`, `ipc list` and cobra shell completion, plus `key=value` CLI param parsing (repeated key → list). |
+| `atomicfile` | Saves that keep mode, owner, SELinux label, ACL, user xattrs, symlinks and hard links; in-place overwrite with fallocate and optional backup. `WriteFile` for app-owned files. |
+| `colorscheme` | Portal light/dark watcher: subscribes in the background, wakes only for the appearance namespace. |
 | `shellapp` | Quickshell app lifecycle: run/restart/kill commands, daemon supervision, PID/session tracking, config-dir resolution (`-c` → `<PREFIX>_SHELL_DIR` → live instance → embedded UI). App-specific behavior hooks in via `PreLaunch`, `ExtraEnv`, `OnUIExit`, and an optional `Done()` channel on the backend. |
 | `shellapp/shellfs` | Materializes an embedded UI tree onto disk — content-hashed, read-only, pruned when stale. |
 | `syncmap` | Generic `sync.Map` (typed keys and values). |

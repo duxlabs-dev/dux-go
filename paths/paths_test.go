@@ -130,3 +130,17 @@ func TestExpandPath(t *testing.T) {
 		assert.Equal(t, filepath.Clean(tc.want), got)
 	}
 }
+
+func TestXDGSearchDirs(t *testing.T) {
+	t.Setenv("XDG_DATA_DIRS", "/opt/share: :/usr/share::")
+	t.Setenv("XDG_CONFIG_DIRS", "")
+	assert.Equal(t, []string{"/opt/share", "/usr/share"}, paths.XDGDataDirs())
+	assert.Equal(t, []string{"/etc/xdg"}, paths.XDGConfigDirs())
+
+	t.Setenv("XDG_DATA_DIRS", "")
+	assert.Equal(t, []string{"/usr/local/share", "/usr/share"}, paths.XDGDataDirs())
+
+	env := map[string]string{"SET": "x"}
+	assert.Equal(t, "x", paths.EnvOr(func(k string) string { return env[k] }, "SET", "y"))
+	assert.Equal(t, "y", paths.EnvOr(func(k string) string { return env[k] }, "UNSET", "y"))
+}

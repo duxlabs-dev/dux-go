@@ -90,6 +90,40 @@ func XDGStateHome() string {
 	return filepath.Join(home, ".local", "state")
 }
 
+const (
+	DefaultDataDirs   = "/usr/local/share:/usr/share"
+	DefaultConfigDirs = "/etc/xdg"
+)
+
+// XDGDataDirs is $XDG_DATA_DIRS split, or the spec default when it is unset or empty.
+func XDGDataDirs() []string {
+	return SplitPathList(EnvOr(os.Getenv, "XDG_DATA_DIRS", DefaultDataDirs))
+}
+
+// XDGConfigDirs is $XDG_CONFIG_DIRS split, or the spec default when it is unset or empty.
+func XDGConfigDirs() []string {
+	return SplitPathList(EnvOr(os.Getenv, "XDG_CONFIG_DIRS", DefaultConfigDirs))
+}
+
+// EnvOr returns env(key), or fallback when that is empty.
+func EnvOr(env func(string) string, key, fallback string) string {
+	if v := env(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// SplitPathList splits a colon-separated list, dropping blank entries.
+func SplitPathList(raw string) []string {
+	var out []string
+	for dir := range strings.SplitSeq(raw, ":") {
+		if dir = strings.TrimSpace(dir); dir != "" {
+			out = append(out, dir)
+		}
+	}
+	return out
+}
+
 func ExpandPath(path string) (string, error) {
 	expanded := os.ExpandEnv(path)
 

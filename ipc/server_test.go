@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,4 +181,105 @@ func TestMux(t *testing.T) {
 	resp, err = client.Call(ipc.Request{ID: 3, Method: "bogus"})
 	require.NoError(t, err)
 	assert.Equal(t, "unknown method: bogus", resp.Error)
+}
+
+func echoLength(ctx context.Context, w *ipc.ConnWriter, req ipc.Request, sub *ipc.Subscriber) {
+	w.Respond(req.ID, map[string]any{"len": len(req.GetOr("data", ""))})
+}
+
+func liveHeap() uint64 {
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.HeapAlloc
+}
+
+func TestLargeRequestDoesNotKeepItsBuffer(t *testing.T) {
+	const size = 24 << 20
+	srv := startServer(t, ipc.Config{AppName: "danktest", APIVersion: 1, MaxLineSize: 32 << 20}, echoLength)
+
+	client, err := ipc.Dial(srv.SocketPath())
+	require.NoError(t, err)
+	defer client.Close()
+	baseline := liveHeap()
+
+	resp, err := client.Call(ipc.Request{ID: 1, Method: "echo", Params: map[string]any{"data": strings.Repeat("x", size)}})
+	require.NoError(t, err)
+	require.Empty(t, resp.Error)
+	assert.Equal(t, map[string]any{"len": float64(size)}, *resp.Result)
+
+	resp, err = client.Call(ipc.Request{ID: 2, Method: "echo", Params: map[string]any{"data": "small"}})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"len": float64(5)}, *resp.Result)
+
+	assert.Eventually(t, func() bool { return liveHeap() < baseline+8<<20 }, 2*time.Second, 20*time.Millisecond,
+		"the open connection must not hold on to the big request's buffer")
+}
+
+func TestOverLimitLineClosesTheConnection(t *testing.T) {
+	srv := startServer(t, ipc.Config{AppName: "danktest", APIVersion: 1, MaxLineSize: 1 << 20}, echoLength)
+
+	conn, err := net.Dial("unix", srv.SocketPath())
+	require.NoError(t, err)
+	defer conn.Close()
+	r := bufio.NewReader(conn)
+	_, err = r.ReadBytes('\n')
+	require.NoError(t, err)
+
+	go func() {
+		payload := `{"id":1,"method":"echo","params":{"data":"` + strings.Repeat("x", 2<<20) + `"}}` + "\n"
+		_, _ = conn.Write([]byte(payload))
+	}()
+
+	line, err := r.ReadBytes('\n')
+	assert.Error(t, err, "the server closes the connection instead of answering")
+	assert.Empty(t, line)
+}
+
+func TestHandlerPanicAnswersWithAnErrorAndKeepsServing(t *testing.T) {
+	handler := func(ctx context.Context, w *ipc.ConnWriter, req ipc.Request, sub *ipc.Subscriber) {
+		switch req.Method {
+		case "boom":
+			panic("kaboom")
+		default:
+			w.Respond(req.ID, map[string]any{"ok": true})
+		}
+	}
+	srv := startServer(t, ipc.Config{AppName: "danktest", APIVersion: 1}, handler)
+
+	client, err := ipc.Dial(srv.SocketPath())
+	require.NoError(t, err)
+	defer client.Close()
+
+	resp, err := client.Call(ipc.Request{ID: 1, Method: "boom"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, resp.ID)
+	assert.Contains(t, resp.Error, "boom")
+	assert.Nil(t, resp.Result)
+
+	resp, err = client.Call(ipc.Request{ID: 2, Method: "fine"})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"ok": true}, *resp.Result)
+}
+
+func TestPanicAfterTheAnswerSendsNoSecondAnswer(t *testing.T) {
+	handler := func(ctx context.Context, w *ipc.ConnWriter, req ipc.Request, sub *ipc.Subscriber) {
+		w.Respond(req.ID, map[string]any{"id": req.ID})
+		if req.Method == "boom" {
+			panic("kaboom")
+		}
+	}
+	cfg := ipc.Config{AppName: "danktest", APIVersion: 1, OnSubscribe: func([]string, *ipc.Subscriber) { panic("kaboom") }}
+	srv := startServer(t, cfg, handler)
+
+	client, err := ipc.Dial(srv.SocketPath())
+	require.NoError(t, err)
+	defer client.Close()
+
+	for id, method := range []string{"boom", "subscribe", "fine"} {
+		resp, err := client.Call(ipc.Request{ID: id + 1, Method: method})
+		require.NoError(t, err)
+		assert.Equal(t, id+1, resp.ID, method)
+		assert.Empty(t, resp.Error, method)
+	}
 }

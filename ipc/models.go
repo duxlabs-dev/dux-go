@@ -35,9 +35,11 @@ func (r Request) GetOr[T any](key string, def T) T {
 
 func (w *ConnWriter) RespondError(id int, msg string) {
 	log.Errorf("ipc error: id=%d method-error=%s", id, msg)
+	w.markAnswered(id)
 	_ = w.WriteResponse(Response[any]{ID: id, Error: msg})
 }
 
 func (w *ConnWriter) Respond[T any](id int, result T) {
+	w.markAnswered(id)
 	_ = w.WriteResponse(Response[T]{ID: id, Result: &result})
 }

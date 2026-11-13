@@ -16,6 +16,39 @@ const writeTimeout = 30 * time.Second
 type ConnWriter struct {
 	mu   sync.Mutex
 	conn net.Conn
+
+	// Requests being dispatched, and whether each has been answered through Respond or RespondError.
+	reqMu    sync.Mutex
+	inFlight map[int]bool
+}
+
+func (w *ConnWriter) begin(id int) {
+	w.reqMu.Lock()
+	defer w.reqMu.Unlock()
+	if w.inFlight == nil {
+		w.inFlight = make(map[int]bool)
+	}
+	w.inFlight[id] = false
+}
+
+func (w *ConnWriter) end(id int) {
+	w.reqMu.Lock()
+	defer w.reqMu.Unlock()
+	delete(w.inFlight, id)
+}
+
+func (w *ConnWriter) markAnswered(id int) {
+	w.reqMu.Lock()
+	defer w.reqMu.Unlock()
+	if _, ok := w.inFlight[id]; ok {
+		w.inFlight[id] = true
+	}
+}
+
+func (w *ConnWriter) answered(id int) bool {
+	w.reqMu.Lock()
+	defer w.reqMu.Unlock()
+	return w.inFlight[id]
 }
 
 func NewConnWriter(conn net.Conn) *ConnWriter {

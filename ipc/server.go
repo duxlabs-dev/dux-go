@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +21,11 @@ import (
 )
 
 const defaultMaxLineSize = 1024 * 1024
+
+// Long lines are collected into a slice dropped after dispatch, so one big request does not pin its buffer.
+const readBufferSize = 64 * 1024
+
+var errLineTooLong = errors.New("request line exceeds MaxLineSize")
 
 type Handler func(ctx context.Context, w *ConnWriter, req Request, sub *Subscriber)
 
@@ -159,11 +166,17 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	subscriber := s.bus.NewSubscriber(connCtx, writer)
 	defer subscriber.Close()
 
-	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 64*1024), s.cfg.MaxLineSize)
-	for scanner.Scan() {
+	reader := bufio.NewReaderSize(conn, readBufferSize)
+	for {
+		line, err := readLine(reader, s.cfg.MaxLineSize)
+		switch {
+		case errors.Is(err, errLineTooLong):
+			log.Warnf("ipc: closing connection: %v (%d bytes)", err, s.cfg.MaxLineSize)
+			return
+		case err != nil:
+			return
+		}
 		var req Request
-		line := scanner.Bytes()
 		if err := json.Unmarshal(line, &req); err != nil {
 			_ = writer.WriteResponse(Response[any]{ID: 0, Error: "invalid json: " + err.Error()})
 			continue
@@ -172,7 +185,48 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	}
 }
 
+// readLine returns the next line without its newline or a trailing \r, like bufio.ScanLines. A line
+// longer than maxSize, newline included, is errLineTooLong. The result is only valid until the next call.
+func readLine(r *bufio.Reader, maxSize int) ([]byte, error) {
+	line, err := r.ReadSlice('\n')
+	if errors.Is(err, bufio.ErrBufferFull) {
+		line, err = readLongLine(r, line, maxSize)
+	}
+	if len(line) > maxSize {
+		return nil, errLineTooLong
+	}
+	switch {
+	case err == nil:
+		return dropCR(line[:len(line)-1]), nil
+	case errors.Is(err, io.EOF) && len(line) > 0:
+		return dropCR(line), nil
+	}
+	return nil, err
+}
+
+func readLongLine(r *bufio.Reader, first []byte, maxSize int) ([]byte, error) {
+	line := append(make([]byte, 0, 2*len(first)), first...)
+	for len(line) <= maxSize {
+		chunk, err := r.ReadSlice('\n')
+		line = append(line, chunk...)
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return line, err
+		}
+	}
+	return line, nil
+}
+
+func dropCR(line []byte) []byte {
+	if len(line) > 0 && line[len(line)-1] == '\r' {
+		return line[:len(line)-1]
+	}
+	return line
+}
+
 func (s *Server) dispatch(ctx context.Context, w *ConnWriter, req Request, sub *Subscriber) {
+	w.begin(req.ID)
+	defer w.end(req.ID)
+	defer recoverHandler(w, req)
 	switch req.Method {
 	case "ping":
 		w.Respond(req.ID, map[string]any{"pong": true})
@@ -195,6 +249,20 @@ func (s *Server) dispatch(ctx context.Context, w *ConnWriter, req Request, sub *
 		}
 		s.handler(ctx, w, req, sub)
 	}
+}
+
+// recoverHandler keeps a panicking handler from taking the whole daemon down with it.
+func recoverHandler(w *ConnWriter, req Request) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	log.Errorf("ipc handler panic: method=%s id=%d: %v\n%s", req.Method, req.ID, r, debug.Stack())
+	// A second answer to the same request would be read as the answer to the next one.
+	if w.answered(req.ID) {
+		return
+	}
+	w.RespondError(req.ID, "internal error handling "+req.Method)
 }
 
 func (s *Server) handleSubscribe(w *ConnWriter, req Request, sub *Subscriber) {
