@@ -24,13 +24,15 @@ func TestChoicesListEverySourceWithLyrics(t *testing.T) {
 		switch provider {
 		case BetterLyrics:
 			return &Lyrics{Synced: []Line{{Start: 1, Text: "word", Words: []Word{{Start: 1, Text: "word"}}}}}, nil
+		case KuGou:
+			return &Lyrics{Synced: []Line{{Start: 1, Text: "another cut"}}, DurationMS: 190_000}, nil
 		case LRCLIB:
 			time.Sleep(20 * client.syncGrace)
 			return &Lyrics{Plain: "slower than the lookup grace"}, nil
 		}
 		return nil, errNotFound
 	})
-	req := Request{Artist: "Artist", Title: "Track", FileURL: trackWithSidecar(t), Providers: []Provider{BetterLyrics, KuGou, LRCLIB}}
+	req := Request{Artist: "Artist", Title: "Track", Duration: 200 * time.Second, FileURL: trackWithSidecar(t), Providers: []Provider{BetterLyrics, KuGou, Unison, LRCLIB}}
 
 	choices, err := client.Choices(context.Background(), req)
 	if err != nil {
@@ -39,6 +41,7 @@ func TestChoicesListEverySourceWithLyrics(t *testing.T) {
 	want := []Choice{
 		{Source: Sidecar, Sync: SyncLine},
 		{Source: BetterLyrics, Attribution: client.sources[BetterLyrics].Attribution, Sync: SyncWord},
+		{Source: KuGou, Attribution: client.sources[KuGou].Attribution, Sync: SyncLine, Problem: ProblemLength},
 		{Source: LRCLIB, Attribution: client.sources[LRCLIB].Attribution, Sync: SyncNone},
 	}
 	if !reflect.DeepEqual(choices, want) {

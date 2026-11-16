@@ -31,12 +31,23 @@ func (l *Lyrics) sync() Sync {
 	return SyncNone
 }
 
+// Problem is why Lookup ranks a provider's lyrics below every provider without one.
+type Problem string
+
+const (
+	// ProblemLength is a reported track length that differs from the requested one.
+	ProblemLength Problem = "length"
+	// ProblemOverrun is a line that starts after the requested track ends.
+	ProblemOverrun Problem = "overrun"
+)
+
 // Choice is one source that has lyrics for a track.
 type Choice struct {
 	Source       Provider    `json:"source"`
 	Attribution  Attribution `json:"attribution,omitzero"`
 	Sync         Sync        `json:"sync"`
 	Instrumental bool        `json:"instrumental,omitempty"`
+	Problem      Problem     `json:"problem,omitempty"`
 }
 
 func choiceOf(result *Result) Choice {
@@ -72,9 +83,12 @@ collect:
 		}
 	}
 	for _, result := range results {
-		if result != nil && result.Found {
-			choices = append(choices, choiceOf(result))
+		if result == nil || !result.Found {
+			continue
 		}
+		choice := choiceOf(result)
+		choice.Problem = problemWith(req, &result.Lyrics)
+		choices = append(choices, choice)
 	}
 	return choices, nil
 }

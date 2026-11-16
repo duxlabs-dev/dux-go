@@ -47,7 +47,7 @@ func pick(req Request, responses []providerResponse) *Result {
 			priority:  i,
 			result:    response.result,
 			cues:      lines,
-			plausible: plausible(req, lyrics),
+			plausible: problemWith(req, lyrics) == "",
 			verified:  req.seconds() > 0 && lyrics.DurationMS > 0,
 			timed:     len(lines) > 0,
 			nearest:   Seconds(math.Inf(1)),
@@ -105,17 +105,19 @@ func cues(lyrics *Lyrics) []Line {
 	return lines
 }
 
-// plausible rejects lyrics timed for another cut, such as a music video with intro footage.
-func plausible(req Request, lyrics *Lyrics) bool {
+// problemWith finds lyrics timed for another cut, such as a music video with intro footage.
+func problemWith(req Request, lyrics *Lyrics) Problem {
 	want := Seconds(req.seconds())
 	if want == 0 {
-		return true
+		return ""
 	}
 	if reported := milliseconds(lyrics.DurationMS); lyrics.DurationMS > 0 && max(reported-want, want-reported) > max(minLengthSlack, want*lengthShare) {
-		return false
+		return ProblemLength
 	}
-	lines := cues(lyrics)
-	return len(lines) == 0 || lines[len(lines)-1].Start <= want+endSlack
+	if lines := cues(lyrics); len(lines) > 0 && lines[len(lines)-1].Start > want+endSlack {
+		return ProblemOverrun
+	}
+	return ""
 }
 
 // medianGap aligns lines by text and compares their starts. A constant offset or
