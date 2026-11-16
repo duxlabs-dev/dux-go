@@ -33,8 +33,12 @@ func (e *cacheEntry) awaitsWordSync() bool {
 	return len(e.Synced) > 0 && !e.wordSynced() && time.Since(time.Unix(e.Fetched, 0)) > upgradeTTL
 }
 
+func trackIdentity(req Request) string {
+	return fold(req.Artist) + "\n" + fold(req.Title) + "\n" + fold(req.Album) + "\n" + strconv.Itoa(req.seconds())
+}
+
 func cacheKey(req Request) string {
-	sum := sha256.Sum256([]byte("lyrics/v" + strconv.Itoa(cacheVersion) + "\n" + fold(req.Artist) + "\n" + fold(req.Title) + "\n" + fold(req.Album) + "\n" + strconv.Itoa(req.seconds())))
+	sum := sha256.Sum256([]byte("lyrics/v" + strconv.Itoa(cacheVersion) + "\n" + trackIdentity(req)))
 	return hex.EncodeToString(sum[:])
 }
 

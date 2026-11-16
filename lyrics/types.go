@@ -22,7 +22,7 @@ const (
 	KuGou        Provider = "kugou"
 	YouTubeMusic Provider = "youtubemusic"
 
-	// Sidecar is a Result.Source only, not requestable.
+	// Sidecar is a Result.Source and a Choose source, not requestable.
 	Sidecar Provider = "sidecar"
 )
 

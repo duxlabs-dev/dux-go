@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	rateBurst  = 10
-	rateRefill = 0.5
-	syncGrace  = 2 * time.Second
+	rateBurst     = 10
+	rateRefill    = 0.5
+	syncGrace     = 2 * time.Second
+	lookupTimeout = 12 * time.Second
 )
 
 var ErrRateLimited = errors.New("rate limited")
@@ -29,7 +30,7 @@ type rateBucket struct {
 }
 
 type Options struct {
-	// CacheDir defaults to dankgo/lyrics under os.UserCacheDir.
+	// CacheDir defaults to dankgo/lyrics under os.UserCacheDir. It also holds what Choose stores.
 	CacheDir  string
 	UserAgent string
 	// DisableUpgrade stops cached line-synced lyrics from being re-requested for word sync.
@@ -76,41 +77,35 @@ func New(opts Options) *Client {
 	return client
 }
 
-// Lookup checks sidecar files, then the cache, then the providers.
+// Lookup returns the source picked with Choose when it has lyrics, else a sidecar file,
+// else the best of the cache and the providers.
 // No lyrics is Found false, not an error. No returned text can open an html tag.
 func (c *Client) Lookup(ctx context.Context, req Request) (*Result, error) {
-	if result, ok := fromSidecar(req.FileURL); ok {
+	chosen := c.Chosen(req)
+	sidecar, hasSidecar := fromSidecar(req.FileURL)
+	if hasSidecar && (chosen == "" || chosen == Sidecar) {
+		return sidecar.withoutMarkup(), nil
+	}
+	providers, err := c.requested(req)
+	if err != nil {
+		return nil, err
+	}
+	if result, ok := c.lookupChosen(ctx, providers, chosen, req); ok {
 		return result.withoutMarkup(), nil
 	}
-	if req.Artist == "" || req.Title == "" {
+	if hasSidecar {
+		return sidecar.withoutMarkup(), nil
+	}
+	if len(providers) == 0 {
 		return &Result{}, nil
 	}
-
-	providers := req.Providers
-	if providers == nil {
-		providers = DefaultProviders()
-	}
-	seen := make(map[Provider]bool, len(providers))
-	ordered := make([]namedSource, 0, len(providers))
-	names := make([]string, 0, len(providers))
-	for _, provider := range providers {
-		if seen[provider] {
-			continue
-		}
-		source, known := c.source(provider)
-		if !known {
-			return nil, fmt.Errorf("unknown lyrics provider: %s", provider)
-		}
-		seen[provider] = true
-		ordered = append(ordered, namedSource{id: provider, Source: source})
-		names = append(names, string(provider))
-	}
-	if len(ordered) == 0 {
-		return &Result{}, nil
+	names := make([]string, len(providers))
+	for i, provider := range providers {
+		names[i] = string(provider.id)
 	}
 	key := fmt.Sprintf("%s/%t/%s", cacheKey(req), req.CacheOnly, strings.Join(names, ","))
 	flight := c.lookups.DoChan(key, func() (any, error) {
-		return c.lookupProviders(context.WithoutCancel(ctx), ordered, req)
+		return c.lookupProviders(context.WithoutCancel(ctx), providers, req)
 	})
 	select {
 	case <-ctx.Done():
@@ -128,18 +123,38 @@ type namedSource struct {
 	Source
 }
 
+// requested resolves req.Providers in order, once each. A track without an artist or title has none.
+func (c *Client) requested(req Request) ([]namedSource, error) {
+	if req.Artist == "" || req.Title == "" {
+		return nil, nil
+	}
+	providers := req.Providers
+	if providers == nil {
+		providers = DefaultProviders()
+	}
+	seen := make(map[Provider]bool, len(providers))
+	ordered := make([]namedSource, 0, len(providers))
+	for _, provider := range providers {
+		if seen[provider] {
+			continue
+		}
+		source, known := c.source(provider)
+		if !known {
+			return nil, fmt.Errorf("unknown lyrics provider: %s", provider)
+		}
+		seen[provider] = true
+		ordered = append(ordered, namedSource{id: provider, Source: source})
+	}
+	return ordered, nil
+}
+
 type providerResponse struct {
 	index  int
 	result *Result
 	err    error
 }
 
-// lookupProviders races all providers and picks among every result that arrives
-// before the deadline. Once one provider has found lyrics, the wait for the rest
-// is bounded by syncGrace.
-func (c *Client) lookupProviders(ctx context.Context, providers []namedSource, req Request) (*Result, error) {
-	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	defer cancel()
+func (c *Client) ask(ctx context.Context, providers []namedSource, req Request) <-chan providerResponse {
 	replies := make(chan providerResponse, len(providers))
 	for index, provider := range providers {
 		go func() {
@@ -147,6 +162,16 @@ func (c *Client) lookupProviders(ctx context.Context, providers []namedSource, r
 			replies <- providerResponse{index: index, result: result, err: err}
 		}()
 	}
+	return replies
+}
+
+// lookupProviders races all providers and picks among every result that arrives
+// before the deadline. Once one provider has found lyrics, the wait for the rest
+// is bounded by syncGrace.
+func (c *Client) lookupProviders(ctx context.Context, providers []namedSource, req Request) (*Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+	defer cancel()
+	replies := c.ask(ctx, providers, req)
 
 	results := make([]providerResponse, len(providers))
 	var grace <-chan time.Time
