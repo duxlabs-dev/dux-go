@@ -116,8 +116,9 @@ func TestResolveStopsOnALinkLoop(t *testing.T) {
 
 // Without fallocate, RLIMIT_FSIZE makes the in-place write fail part-way, the way a full disk does on btrfs.
 func TestOverwriteRestoresTheOriginalWhenTheWriteFails(t *testing.T) {
+	real := fallocate
 	fallocate = func(int, uint32, int64, int64) error { return unix.EOPNOTSUPP }
-	t.Cleanup(func() { fallocate = unix.Fallocate })
+	t.Cleanup(func() { fallocate = real })
 	dir := t.TempDir()
 	backups := filepath.Join(t.TempDir(), "swap")
 	a, b := filepath.Join(dir, "a"), filepath.Join(dir, "b")

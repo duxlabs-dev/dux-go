@@ -42,7 +42,7 @@ func Identity(info os.FileInfo) string {
 	if !ok {
 		return identity(0, 0, info.Size(), info.ModTime().UnixNano())
 	}
-	return identity(st.Dev, st.Ino, st.Size, st.Mtim.Nano())
+	return identity(st.Dev, st.Ino, st.Size, info.ModTime().UnixNano())
 }
 
 // StatIdentity is what Stat returns, for a stat buffer already at hand.
@@ -230,15 +230,12 @@ func writeInPlace(f *os.File, data []byte) error {
 	return f.Sync()
 }
 
-// Tests replace it to act like a filesystem that cannot reserve.
-var fallocate = unix.Fallocate
-
 func reserve(f *os.File, size int64) error {
 	if size == 0 {
 		return nil
 	}
 	for {
-		err := fallocate(int(f.Fd()), unix.FALLOC_FL_KEEP_SIZE, 0, size)
+		err := fallocate(int(f.Fd()), fallocKeepSize, 0, size)
 		switch {
 		case err == nil:
 			return nil
