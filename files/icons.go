@@ -8,14 +8,31 @@ import (
 const genericIcon = "text-x-generic"
 
 type iconIndex struct {
-	once     sync.Once
+	mu       sync.Mutex
 	userDirs map[string]string
+	stamp    userDirsStamp
 	mimeIcon func(mimeType string) (specific, generic string)
 }
 
 func (i *iconIndex) dirs() map[string]string {
-	i.once.Do(func() { i.userDirs = loadUserDirs() })
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.userDirs == nil {
+		i.stamp = stampUserDirsFile()
+		i.userDirs = loadUserDirs()
+	}
 	return i.userDirs
+}
+
+func (i *iconIndex) reloadChangedUserDirs() {
+	stamp := stampUserDirsFile()
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.userDirs == nil || stamp == i.stamp {
+		return
+	}
+	i.stamp = stamp
+	i.userDirs = loadUserDirs()
 }
 
 func (i *iconIndex) best(e Entry) string {

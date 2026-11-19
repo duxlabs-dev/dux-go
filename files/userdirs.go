@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 var userDirIcons = map[string]string{
@@ -12,6 +13,7 @@ var userDirIcons = map[string]string{
 	"XDG_DOWNLOAD_DIR":    "folder-download",
 	"XDG_MUSIC_DIR":       "folder-music",
 	"XDG_PICTURES_DIR":    "folder-pictures",
+	"XDG_PROJECTS_DIR":    "folder-projects",
 	"XDG_PUBLICSHARE_DIR": "folder-publicshare",
 	"XDG_TEMPLATES_DIR":   "folder-templates",
 	"XDG_VIDEOS_DIR":      "folder-videos",
@@ -24,6 +26,7 @@ var userDirOrder = []string{
 	"XDG_MUSIC_DIR",
 	"XDG_PICTURES_DIR",
 	"XDG_VIDEOS_DIR",
+	"XDG_PROJECTS_DIR",
 	"XDG_PUBLICSHARE_DIR",
 	"XDG_TEMPLATES_DIR",
 }
@@ -43,15 +46,11 @@ func loadUserDirPaths() map[string]string {
 		}
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
+	file, ok := userDirsFile()
+	if !ok {
 		return paths
 	}
-	config := os.Getenv("XDG_CONFIG_HOME")
-	if config == "" {
-		config = filepath.Join(home, ".config")
-	}
-	data, err := os.ReadFile(filepath.Join(config, "user-dirs.dirs"))
+	data, err := os.ReadFile(file)
 	if err != nil {
 		return paths
 	}
@@ -70,6 +69,35 @@ func loadUserDirPaths() map[string]string {
 		paths[key] = value
 	}
 	return paths
+}
+
+func userDirsFile() (string, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", false
+	}
+	config := os.Getenv("XDG_CONFIG_HOME")
+	if config == "" {
+		config = filepath.Join(home, ".config")
+	}
+	return filepath.Join(config, "user-dirs.dirs"), true
+}
+
+type userDirsStamp struct {
+	modTime time.Time
+	size    int64
+}
+
+func stampUserDirsFile() userDirsStamp {
+	file, ok := userDirsFile()
+	if !ok {
+		return userDirsStamp{}
+	}
+	info, err := os.Stat(file)
+	if err != nil {
+		return userDirsStamp{}
+	}
+	return userDirsStamp{modTime: info.ModTime(), size: info.Size()}
 }
 
 func loadUserDirs() map[string]string {

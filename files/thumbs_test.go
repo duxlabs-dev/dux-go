@@ -204,3 +204,22 @@ func TestHandleThumbnailWithoutWatchGeneratesInline(t *testing.T) {
 	assert.NotEmpty(t, entry["thumbnail"])
 	assert.Nil(t, entry["pending"])
 }
+
+func TestWatchListsTheThumbnailSizeItWasAskedFor(t *testing.T) {
+	svc := NewService(&fakeBus{}, t.TempDir(), nil)
+	t.Cleanup(svc.Close)
+
+	root := t.TempDir()
+	source := filepath.Join(root, "photo.png")
+	writeTestPNG(t, source, 300, 300)
+	generated := resultOf(t, call(t, svc, ipc.Request{ID: 1, Method: "files.thumbnail", Params: map[string]any{"path": source, "size": "large"}}))
+	large := generated["results"].([]any)[0].(map[string]any)["thumbnail"]
+	require.NotEmpty(t, large)
+
+	listedThumbnail := func(params map[string]any) any {
+		opened := resultOf(t, call(t, svc, ipc.Request{ID: 2, Method: "files.watch", Params: params}))
+		return opened["entries"].([]any)[0].(map[string]any)["thumbnail"]
+	}
+	assert.Equal(t, large, listedThumbnail(map[string]any{"path": root, "thumbnailSize": "large"}))
+	assert.Empty(t, listedThumbnail(map[string]any{"path": root}), "only the large size is cached")
+}

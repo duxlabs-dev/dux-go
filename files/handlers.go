@@ -273,8 +273,9 @@ func listOptions(req ipc.Request) (ListOptions, error) {
 			DirsFirst:  boolParam(req.Params, "dirsFirst", true),
 			HiddenLast: boolParam(req.Params, "hiddenLast", false),
 		},
-		Limit:  intParam(req.Params, "limit", DefaultPageSize),
-		Cursor: params.StringOpt(req.Params, "cursor", ""),
+		Limit:     intParam(req.Params, "limit", DefaultPageSize),
+		Cursor:    params.StringOpt(req.Params, "cursor", ""),
+		ThumbSize: params.StringOpt(req.Params, "thumbnailSize", ""),
 	}, nil
 }
 

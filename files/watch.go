@@ -74,6 +74,7 @@ type watch struct {
 	spec          SortSpec
 	includeHidden bool
 	filters       nameFilter
+	thumbSize     string
 	seq           int
 	hidden        int
 	misplaced     bool
@@ -104,6 +105,7 @@ func (s *Service) openWatch(ctx context.Context, path string, opts ListOptions) 
 		spec:          opts.Sort,
 		includeHidden: opts.IncludeHidden,
 		filters:       opts.Filters,
+		thumbSize:     ParseThumbSize(opts.ThumbSize),
 		subscribed:    s.attachOnOpen.Load(),
 		pollOnFocus:   needsFocusRefresh(path),
 	}
@@ -367,6 +369,7 @@ func (w *watch) enrich(pending []Entry) <-chan struct{} {
 }
 
 func (w *watch) enrichChunk(chunk []Entry) {
+	thumbSize := w.thumbnailSize()
 	changed := make([]Entry, 0, len(chunk))
 	for _, e := range chunk {
 		if w.closed() {
@@ -380,7 +383,7 @@ func (w *watch) enrichChunk(chunk []Entry) {
 		}
 		updated.Thumbnailable = w.svc.thumbs.Supports(updated.Mime)
 		if updated.Thumbnailable {
-			updated.Thumbnail, _ = w.svc.thumbs.Lookup(updated.Path, updated.MtimeMs, "normal")
+			updated.Thumbnail, _ = w.svc.thumbs.Lookup(updated.Path, updated.MtimeMs, thumbSize)
 		}
 		updated.IconName = w.svc.builder.icons.best(updated)
 		w.svc.builder.display(&updated)
@@ -517,11 +520,18 @@ func (w *watch) page(opts ListOptions) (Page, int) {
 	}
 	w.includeHidden = opts.IncludeHidden
 	w.filters = opts.Filters
+	w.thumbSize = ParseThumbSize(opts.ThumbSize)
 	w.hidden = hiddenCount(w.entries, w.includeHidden, w.filters)
 	page := pageOf(w.view(), opts.Cursor, opts.Limit)
 	page.Entries = slices.Clone(page.Entries)
 	page.Hidden = w.hidden
 	return page, w.seq
+}
+
+func (w *watch) thumbnailSize() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.thumbSize
 }
 
 func (w *watch) entry(name string) (Entry, bool) {

@@ -17,6 +17,7 @@ type ListOptions struct {
 	Sort          SortSpec
 	Limit         int
 	Cursor        string
+	ThumbSize     string
 }
 
 type Page struct {
@@ -77,6 +78,7 @@ func (b *builder) readDir(dir string) ([]Entry, error) {
 		return nil, Wrap(dir, err)
 	}
 
+	b.icons.reloadChangedUserDirs()
 	hidden := hiddenNames(dir)
 	entries := make([]Entry, 0, len(names))
 	for _, de := range names {
