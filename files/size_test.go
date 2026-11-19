@@ -133,9 +133,13 @@ func TestSizeCancelUnregistersTheScan(t *testing.T) {
 	svc := NewService(bus, t.TempDir(), nil)
 	t.Cleanup(svc.Close)
 
-	sc := svc.startSize(context.Background(), []string{sizeTree(t)})
+	ctx, cancel := context.WithCancel(context.Background())
+	sc := &scan{svc: svc, cancel: cancel}
+	sc.id = svc.registerScan(sc)
 	assert.True(t, svc.cancelScan(sc.id))
-	bus.final(t)
+
+	sc.run(ctx, []string{sizeTree(t)})
+	assert.True(t, bus.final(t).Cancelled)
 	assert.False(t, svc.cancelScan(sc.id), "a finished scan is no longer cancellable")
 }
 
