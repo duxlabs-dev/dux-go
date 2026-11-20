@@ -20,10 +20,19 @@ import (
 	"github.com/duxlabs-dev/dux-go/files"
 )
 
-const helperProcessEnv = "DUX_GO_TEST_HELPER_PROCESS"
+const (
+	helperProcessEnv = "DUX_GO_TEST_HELPER_PROCESS"
+	userNSProbeEnv   = "DUX_GO_TEST_USERNS_PROBE"
+)
 
 func TestMain(m *testing.M) {
-	if os.Getenv(helperProcessEnv) == "" {
+	switch {
+	case os.Getenv(userNSProbeEnv) != "":
+		if unix.Prctl(unix.PR_CAPBSET_DROP, unix.CAP_SYS_ADMIN, 0, 0, 0) != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	case os.Getenv(helperProcessEnv) == "":
 		os.Exit(m.Run())
 	}
 	UnderPkexec("test", func(args []string, stdin io.Reader, stdout io.Writer) (any, error) {
@@ -69,11 +78,16 @@ func helperProcess(t *testing.T, asRoot bool, stdin []byte, env []string, args .
 	return cmd, &stdout, &stderr
 }
 
+// Ubuntu's AppArmor userns restriction creates the namespace but denies its capabilities, so probe a real drop.
 func startOrSkip(t *testing.T, cmd *exec.Cmd) {
 	t.Helper()
-	if err := cmd.Start(); err != nil {
-		t.Skip("user namespaces unavailable: " + err.Error())
+	probe := exec.Command(cmd.Path)
+	probe.Env = append(os.Environ(), userNSProbeEnv+"=1")
+	probe.SysProcAttr = cmd.SysProcAttr
+	if err := probe.Run(); err != nil {
+		t.Skip("no root in a user namespace: " + err.Error())
 	}
+	require.NoError(t, cmd.Start())
 }
 
 func exitCode(err error) int {
