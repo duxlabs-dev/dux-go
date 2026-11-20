@@ -19,7 +19,11 @@ const (
 	CodeIO           Code = "EIO"
 	CodeNotSupported Code = "NOTSUPPORTED"
 	CodeSandboxed    Code = "SANDBOXED"
+	CodeConflict     Code = "CONFLICT"
 )
+
+// ErrConflict means the file no longer is the one an operation was based on.
+var ErrConflict = errors.New("the file changed since it was read")
 
 type Error struct {
 	Code Code
@@ -35,6 +39,23 @@ func (e *Error) Error() string {
 }
 
 func (e *Error) Unwrap() error { return e.Err }
+
+// Is matches a code that crossed a process boundary, where Err is only its message, against the usual sentinels.
+func (e *Error) Is(target error) bool {
+	switch target {
+	case fs.ErrNotExist:
+		return e.Code == CodeNotFound
+	case fs.ErrPermission:
+		return e.Code == CodeAccess
+	case fs.ErrExist:
+		return e.Code == CodeExists
+	case fs.ErrInvalid:
+		return e.Code == CodeInvalid
+	case ErrConflict:
+		return e.Code == CodeConflict
+	}
+	return false
+}
 
 func CodeOf(err error) Code {
 	var coded *Error
