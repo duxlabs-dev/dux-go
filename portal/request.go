@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -72,8 +73,12 @@ func (w *responseWaiter) redirect(path dbus.ObjectPath) error {
 func (w *responseWaiter) wait(ctx context.Context) (map[string]dbus.Variant, error) {
 	for {
 		select {
-		case sig := <-w.signals:
-			if sig == nil || sig.Path != w.path || sig.Name != requestInterface+".Response" || len(sig.Body) < 2 {
+		case sig, ok := <-w.signals:
+			// godbus closes the channel when the connection drops.
+			if !ok {
+				return nil, dbus.ErrClosed
+			}
+			if sig.Path != w.path || sig.Name != requestInterface+".Response" || len(sig.Body) < 2 {
 				continue
 			}
 			code, ok := sig.Body[0].(uint32)
@@ -90,9 +95,17 @@ func (w *responseWaiter) wait(ctx context.Context) (map[string]dbus.Variant, err
 				return nil, fmt.Errorf("portal request failed (code %d)", code)
 			}
 		case <-ctx.Done():
+			w.closeRequest()
 			return nil, ctx.Err()
 		}
 	}
+}
+
+// closeRequest dismisses the dialog of a caller that gave up.
+func (w *responseWaiter) closeRequest() {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = w.conn.Object(busName, w.path).CallWithContext(ctx, requestInterface+".Close", 0).Err
 }
 
 func (w *responseWaiter) close() {
